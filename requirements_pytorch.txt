@@ -15,7 +15,7 @@ numba
 pyyaml
 PyQt6
 scipy
-sklearn
+scikit-learn
 soundfile
 torch
 torchinfo

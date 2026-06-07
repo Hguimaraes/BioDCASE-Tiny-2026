@@ -1,0 +1,27 @@
+# Baseline evaluation for the pretrained demo PyTorch/TFLite artifacts.
+
+experiment:
+  id: baseline_pretrained
+  name: Baseline pretrained model evaluation
+  output_root: ./output/experiments
+  notes: Evaluate existing pretrained artifacts before new model experiments.
+
+dataset:
+  config_path: ./config.yaml
+  # Override with --dataset-root or BIODCASE_DATASET_ROOT on local/remote machines.
+  root_path: ${BIODCASE_DATASET_ROOT}
+  split: test
+
+submission:
+  config_path: ./submission/config_submission.yaml
+  skip_embedded: true
+
+models:
+  - name: test_Baseline_pytorch
+    path: ./submission/your_submission_model/test_Baseline.pth
+  - name: test_Baseline_tflite
+    path: ./submission/your_submission_model/test_Baseline.tflite
+
+docker:
+  compile_generated_code: false
+
