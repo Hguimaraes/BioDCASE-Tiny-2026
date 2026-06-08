@@ -69,6 +69,44 @@ python3 -m experiments.run_baseline \
 
 All experiments should produce a YAML run record and a CSV summary row.
 
+## MSS 2D Input Experiment
+
+This experiment keeps the full BioME-style modulation spectrum map instead of
+averaging over the acoustic-frequency and modulation-frequency axes.
+
+```text
+waveform -> STFT power -> amplitude envelope -> FFT over time -> [1, 513, 151]
+```
+
+Fast local checks:
+
+```bash
+python3 -m experiments.run_mss2d \
+  --mode preflight \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+
+python3 -m experiments.run_mss2d \
+  --mode feature-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+
+python3 -m experiments.run_mss2d \
+  --mode model-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+The current feature-smoke result is `[1, 513, 151]`. The current MSS-only
+TinyCNN has 62,923 trainable parameters.
+
+Remote training command:
+
+```bash
+BIODCASE_DATASET_ROOT=/path/to/biodcase2026_tinyML \
+python3 -m experiments.run_mss2d --mode train
+```
+
+Training uses `cache_mss2d_v1`, so it will not mix with the baseline mel cache.
+Model checkpoints and run records are written under ignored `output/`.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

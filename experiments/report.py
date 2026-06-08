@@ -47,6 +47,9 @@ def display_columns(fields: list[str]) -> list[str]:
     "test_Baseline_tflite.roc_auc_macro_ovr",
     "test_Baseline_pytorch.size_bytes",
     "test_Baseline_tflite.size_bytes",
+    "mss2d.feature_shape",
+    "mss2d.num_params",
+    "mss2d.model_path",
   ]
   return [field for field in preferred if field in fields]
 
@@ -156,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-

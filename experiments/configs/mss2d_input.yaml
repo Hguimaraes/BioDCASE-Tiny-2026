@@ -1,0 +1,65 @@
+# MSS-only experiment using a full 2D BioME-style modulation-spectrum map.
+
+experiment:
+  id: mss2d_input
+  name: Modulation spectrum 2D input
+  output_root: ./output/experiments
+
+base_config: ./config.yaml
+
+dataset:
+  root_path: ${BIODCASE_DATASET_ROOT}
+
+training_config_overrides:
+  skip_deployment_flag: true
+
+  datamodule:
+    dataset:
+      root_path: ${BIODCASE_DATASET_ROOT}
+    intermediate:
+      intermediate_id: intermediate_mss2d_v1
+    caching:
+      cache_id: cache_mss2d_v1
+    feature_extraction:
+      target_sample_rate: 24000
+      mss_n_fft1: 1024
+      mss_n_fft2: null
+      mss_win_size: 600
+      mss_win_shift: 240
+      log_scale: true
+      normalize_features: true
+      resize_shape: null
+    feature_handler_add_kwargs:
+      add_channel_dimension: true
+    redo_cache: false
+    redo_intermediate: false
+
+  pytorch_framework:
+    dataloader_train_kwargs:
+      batch_size: 32
+      shuffle: true
+    dataloader_validation_and_test_kwargs:
+      batch_size: 32
+      shuffle: false
+    model:
+      module: pipeline_pytorch.model_mss2d
+      attr: MSS2DTinyCNN
+      args: []
+      kwargs:
+        model_name: MSS2DTinyCNN
+        device:
+          use_cpu: false
+          device_name: cuda:0
+        criterion:
+          module: torch.nn
+          attr: CrossEntropyLoss
+          kwargs: {}
+        optimizer:
+          module: torch.optim
+          attr: Adam
+          kwargs:
+            lr: 0.001
+            betas: [0.9, 0.999]
+        verbose: false
+    model_training:
+      num_epochs: 100
