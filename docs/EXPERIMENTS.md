@@ -269,6 +269,17 @@ python3 -m experiments.run_perch \
   --num-epochs 10
 ```
 
+The teacher head is trained on frozen Perch embeddings and writes:
+
+```text
+models/perch_embedding_head_best.keras
+models/perch_embedding_head_final.keras
+teacher_soft_labels.npz
+```
+
+The `.npz` file contains clean-audio teacher logits and probabilities for the
+train and validation splits. Use the best checkpoint for distillation.
+
 For a CPU smoke run, cap each class per split:
 
 ```bash
@@ -281,6 +292,15 @@ python3 -m experiments.run_perch \
 
 This trains only a small dense classifier head on cached frozen Perch
 embeddings. It does not fine-tune Perch and is not intended for deployment.
+
+To regenerate soft labels from an existing best teacher head:
+
+```bash
+python3 -m experiments.run_perch \
+  --mode export-soft-labels \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML \
+  --teacher-model-path output/experiments/perch2_eval/<run>_train-head/models/perch_embedding_head_best.keras
+```
 
 ## Local HTML Report
 

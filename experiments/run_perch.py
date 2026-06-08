@@ -91,7 +91,13 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--mode",
-    choices=["preflight", "label-map", "hoplite-smoke", "train-head"],
+    choices=[
+      "preflight",
+      "label-map",
+      "hoplite-smoke",
+      "train-head",
+      "export-soft-labels",
+    ],
     default="preflight",
     help="Which Perch setup stage to run.",
   )
@@ -127,6 +133,17 @@ def parse_args() -> argparse.Namespace:
     type=int,
     default=32,
     help="Batch size for the classifier head.",
+  )
+  parser.add_argument(
+    "--early-stopping-patience",
+    type=int,
+    default=10,
+    help="Patience for Perch teacher-head early stopping. Use 0 to disable.",
+  )
+  parser.add_argument(
+    "--teacher-model-path",
+    default=None,
+    help="Path to a saved Perch teacher head for export-soft-labels.",
   )
   return parser.parse_args()
 
@@ -317,11 +334,12 @@ def embed_examples(
     model,
     examples: list[tuple[Path, int]],
     split_name: str,
-) -> tuple[Any, Any, dict[str, Any]]:
+) -> tuple[Any, Any, list[str], dict[str, Any]]:
   import numpy as np
 
   embeddings = []
   labels = []
+  paths = []
   native_sample_rates = set()
   for idx, (path, label_idx) in enumerate(examples, start=1):
     if idx == 1 or idx % 25 == 0 or idx == len(examples):
@@ -334,9 +352,11 @@ def embed_examples(
     pooled = outputs.embeddings.mean(axis=(1, 2))[0]
     embeddings.append(pooled.astype(np.float32))
     labels.append(label_idx)
+    paths.append(str(path))
   return (
     np.stack(embeddings, axis=0),
     np.array(labels, dtype=np.int64),
+    paths,
     {
       "num_examples": len(examples),
       "native_sample_rates": sorted(native_sample_rates),
@@ -348,7 +368,7 @@ def load_or_create_embeddings(
     config: dict[str, Any],
     args: argparse.Namespace,
     run_dir: Path,
-) -> tuple[Any, Any, Any, Any, list[str], dict[str, Any]]:
+) -> tuple[Any, Any, Any, Any, list[str], dict[str, Any], dict[str, list[str]]]:
   import numpy as np
   from perch_hoplite.zoo import model_configs
 
@@ -379,13 +399,34 @@ def load_or_create_embeddings(
     cached = np.load(cache_path, allow_pickle=True)
     metadata["train_info"] = cached["train_info"].item()
     metadata["validation_info"] = cached["validation_info"].item()
+    labels = [str(label) for label in cached["labels"]]
+    dataset_path = resolve_dataset_root(config.get("dataset", {}).get("root_path"))
+    if dataset_path is None:
+      raise RuntimeError("Dataset path disappeared while loading cached embeddings.")
+    paths = {
+      "train": (
+        [str(path) for path in cached["train_paths"]]
+        if "train_paths" in cached
+        else [str(path) for path, _ in split_examples(
+          dataset_path, "Train", labels, args.max_files_per_class
+        )]
+      ),
+      "validation": (
+        [str(path) for path in cached["validation_paths"]]
+        if "validation_paths" in cached
+        else [str(path) for path, _ in split_examples(
+          dataset_path, "Validation", labels, args.max_files_per_class
+        )]
+      ),
+    }
     return (
       cached["x_train"],
       cached["y_train"],
       cached["x_validation"],
       cached["y_validation"],
-      list(cached["labels"]),
+      labels,
       metadata,
+      paths,
     )
 
   print(f"Loading Perch model preset: {model_choice}")
@@ -402,8 +443,10 @@ def load_or_create_embeddings(
   validation_examples = split_examples(
     dataset_path, "Validation", labels, args.max_files_per_class
   )
-  x_train, y_train, train_info = embed_examples(model, train_examples, "Train")
-  x_validation, y_validation, validation_info = embed_examples(
+  x_train, y_train, train_paths, train_info = embed_examples(
+    model, train_examples, "Train"
+  )
+  x_validation, y_validation, validation_paths, validation_info = embed_examples(
     model, validation_examples, "Validation"
   )
 
@@ -415,13 +458,105 @@ def load_or_create_embeddings(
     x_validation=x_validation,
     y_validation=y_validation,
     labels=np.array(labels),
+    train_paths=np.array(train_paths),
+    validation_paths=np.array(validation_paths),
     train_info=train_info,
     validation_info=validation_info,
   )
   metadata["train_info"] = train_info
   metadata["validation_info"] = validation_info
   print(f"Saved Perch embedding cache: {cache_path}")
-  return x_train, y_train, x_validation, y_validation, labels, metadata
+  return (
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels,
+    metadata,
+    {"train": train_paths, "validation": validation_paths},
+  )
+
+
+def softmax(logits):
+  import numpy as np
+
+  shifted = logits - logits.max(axis=1, keepdims=True)
+  exp = np.exp(shifted)
+  return exp / exp.sum(axis=1, keepdims=True)
+
+
+def evaluate_teacher_predictions(
+    y_true,
+    logits,
+    labels: list[str],
+    split_name: str,
+) -> dict[str, Any]:
+  import numpy as np
+  from sklearn.metrics import accuracy_score, roc_auc_score
+
+  probs = softmax(logits)
+  y_pred = np.argmax(probs, axis=1)
+  metrics = {
+    f"{split_name}_accuracy": float(accuracy_score(y_true, y_pred)),
+  }
+  try:
+    metrics[f"{split_name}_roc_auc_macro_ovr"] = float(
+      roc_auc_score(
+        y_true,
+        probs,
+        multi_class="ovr",
+        average="macro",
+        labels=list(range(len(labels))),
+      )
+    )
+  except ValueError as exc:
+    metrics[f"{split_name}_roc_auc_macro_ovr"] = None
+    print(f"{split_name} ROC-AUC unavailable: {exc}")
+  return metrics
+
+
+def write_teacher_soft_labels(
+    model,
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels: list[str],
+    paths: dict[str, list[str]],
+    output_path: Path,
+    batch_size: int,
+) -> dict[str, Any]:
+  import numpy as np
+
+  train_logits = model.predict(x_train, batch_size=batch_size, verbose=0)
+  validation_logits = model.predict(x_validation, batch_size=batch_size, verbose=0)
+  train_probs = softmax(train_logits)
+  validation_probs = softmax(validation_logits)
+  output_path.parent.mkdir(parents=True, exist_ok=True)
+  np.savez_compressed(
+    output_path,
+    labels=np.array(labels),
+    train_paths=np.array(paths["train"]),
+    train_y=y_train,
+    train_logits=train_logits.astype(np.float32),
+    train_probs=train_probs.astype(np.float32),
+    validation_paths=np.array(paths["validation"]),
+    validation_y=y_validation,
+    validation_logits=validation_logits.astype(np.float32),
+    validation_probs=validation_probs.astype(np.float32),
+  )
+  result = {
+    "path": str(output_path),
+    "train_shape": list(train_probs.shape),
+    "validation_shape": list(validation_probs.shape),
+  }
+  result.update(evaluate_teacher_predictions(y_train, train_logits, labels, "train"))
+  result.update(
+    evaluate_teacher_predictions(
+      y_validation, validation_logits, labels, "validation"
+    )
+  )
+  return result
 
 
 def train_head(
@@ -430,29 +565,59 @@ def train_head(
     run_dir: Path,
 ) -> dict[str, Any]:
   import numpy as np
-  from sklearn.metrics import accuracy_score, roc_auc_score
   import tensorflow as tf
 
   add_perch_repo_to_path(config)
-  x_train, y_train, x_validation, y_validation, labels, embedding_metadata = (
-    load_or_create_embeddings(config, args, run_dir)
-  )
+  (
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels,
+    embedding_metadata,
+    paths,
+  ) = load_or_create_embeddings(config, args, run_dir)
   tf.random.set_seed(1337)
+  best_model_path = run_dir / "models" / "perch_embedding_head_best.keras"
+  final_model_path = run_dir / "models" / "perch_embedding_head_final.keras"
+  soft_labels_path = run_dir / "teacher_soft_labels.npz"
+  best_model_path.parent.mkdir(parents=True, exist_ok=True)
   model = tf.keras.Sequential([
     tf.keras.layers.Input(shape=(x_train.shape[1],)),
     tf.keras.layers.LayerNormalization(),
     tf.keras.layers.Dense(128, activation="relu"),
     tf.keras.layers.Dropout(0.2),
-    tf.keras.layers.Dense(len(labels), activation="softmax"),
+    tf.keras.layers.Dense(len(labels)),
   ])
   model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-    loss="sparse_categorical_crossentropy",
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
     metrics=["accuracy"],
   )
   print("=== Perch Embedding Head ===")
   print(f"train shape: {x_train.shape}, validation shape: {x_validation.shape}")
   print(f"labels: {labels}")
+  callbacks = [
+    tf.keras.callbacks.ModelCheckpoint(
+      filepath=best_model_path,
+      monitor="val_accuracy",
+      mode="max",
+      save_best_only=True,
+      verbose=1,
+    ),
+  ]
+  if args.early_stopping_patience > 0:
+    callbacks.append(
+      tf.keras.callbacks.EarlyStopping(
+        monitor="val_accuracy",
+        mode="max",
+        patience=args.early_stopping_patience,
+        min_delta=0.001,
+        restore_best_weights=True,
+        verbose=1,
+      )
+    )
+
   history = model.fit(
     x_train,
     y_train,
@@ -460,32 +625,38 @@ def train_head(
     epochs=args.num_epochs,
     batch_size=args.batch_size,
     verbose=2,
+    callbacks=callbacks,
   )
-  y_prob = model.predict(x_validation, batch_size=args.batch_size, verbose=0)
-  y_pred = np.argmax(y_prob, axis=1)
-  accuracy = float(accuracy_score(y_validation, y_pred))
-  try:
-    roc_auc = float(
-      roc_auc_score(
-        y_validation,
-        y_prob,
-        multi_class="ovr",
-        average="macro",
-        labels=list(range(len(labels))),
-      )
-    )
-  except ValueError as exc:
-    roc_auc = None
-    print(f"Validation ROC-AUC unavailable: {exc}")
-
-  model_path = run_dir / "models" / "perch_embedding_head.keras"
-  model_path.parent.mkdir(parents=True, exist_ok=True)
-  model.save(model_path)
+  final_model = model
+  final_model.save(final_model_path)
+  best_model = tf.keras.models.load_model(best_model_path)
+  validation_logits = best_model.predict(
+    x_validation, batch_size=args.batch_size, verbose=0
+  )
+  validation_metrics = evaluate_teacher_predictions(
+    y_validation, validation_logits, labels, "validation"
+  )
+  soft_labels = write_teacher_soft_labels(
+    best_model,
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels,
+    paths,
+    soft_labels_path,
+    args.batch_size,
+  )
+  val_history = history.history.get("val_accuracy", [])
+  best_epoch = int(np.argmax(val_history) + 1) if val_history else None
+  best_val_accuracy = float(max(val_history)) if val_history else None
   return {
     "status": "ok",
     "model_choice": config.get("perch", {}).get("model_choice", "perch_8"),
     "num_epochs": args.num_epochs,
+    "epochs_ran": len(history.history.get("loss", [])),
     "batch_size": args.batch_size,
+    "early_stopping_patience": args.early_stopping_patience,
     "max_files_per_class": args.max_files_per_class,
     "labels": labels,
     "num_classes": len(labels),
@@ -503,9 +674,62 @@ def train_head(
       for key, values in history.history.items()
       if values
     },
-    "validation_accuracy": accuracy,
-    "validation_roc_auc_macro_ovr": roc_auc,
-    "model_path": str(model_path),
+    "best_epoch": best_epoch,
+    "best_validation_accuracy": best_val_accuracy,
+    "validation_accuracy": validation_metrics.get("validation_accuracy"),
+    "validation_roc_auc_macro_ovr": validation_metrics.get(
+      "validation_roc_auc_macro_ovr"
+    ),
+    "model_path": str(best_model_path),
+    "final_model_path": str(final_model_path),
+    "soft_labels": soft_labels,
+    "embedding_metadata": embedding_metadata,
+  }
+
+
+def export_soft_labels(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+) -> dict[str, Any]:
+  import tensorflow as tf
+
+  if not args.teacher_model_path:
+    raise RuntimeError("--teacher-model-path is required for export-soft-labels.")
+  add_perch_repo_to_path(config)
+  (
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels,
+    embedding_metadata,
+    paths,
+  ) = load_or_create_embeddings(config, args, run_dir)
+  model = tf.keras.models.load_model(args.teacher_model_path)
+  soft_labels_path = run_dir / "teacher_soft_labels.npz"
+  soft_labels = write_teacher_soft_labels(
+    model,
+    x_train,
+    y_train,
+    x_validation,
+    y_validation,
+    labels,
+    paths,
+    soft_labels_path,
+    args.batch_size,
+  )
+  return {
+    "status": "ok",
+    "model_choice": config.get("perch", {}).get("model_choice", "perch_8"),
+    "teacher_model_path": args.teacher_model_path,
+    "labels": labels,
+    "num_classes": len(labels),
+    "dataset_lengths": {
+      "train": int(len(y_train)),
+      "validation": int(len(y_validation)),
+    },
+    "soft_labels": soft_labels,
     "embedding_metadata": embedding_metadata,
   }
 
@@ -569,11 +793,14 @@ def write_run(
     "perch.missing_modules": ", ".join(missing),
     "perch.status": results.get("status"),
     "perch.train.validation_accuracy": results.get("validation_accuracy"),
+    "perch.train.best_validation_accuracy": results.get("best_validation_accuracy"),
+    "perch.train.best_epoch": results.get("best_epoch"),
     "perch.train.validation_roc_auc_macro_ovr": results.get("validation_roc_auc_macro_ovr"),
     "perch.train.num_epochs": results.get("num_epochs"),
     "perch.train.dataset_lengths": results.get("dataset_lengths"),
     "perch.train.max_files_per_class": results.get("max_files_per_class"),
     "perch.train.model_path": results.get("model_path"),
+    "perch.teacher_soft_labels": (results.get("soft_labels") or {}).get("path"),
   }
   runtime.append_summary(row, config)
   return run_dir
@@ -588,13 +815,16 @@ def main() -> None:
     results = label_map(config)
   elif args.mode == "hoplite-smoke":
     results = hoplite_smoke(config)
-  else:
+  elif args.mode in ("train-head", "export-soft-labels"):
     run_dir = runtime.make_run_dir(config, args.mode)
-    log_path = run_dir / "train.log"
+    log_path = run_dir / ("train.log" if args.mode == "train-head" else "export.log")
     with tee_to_file(log_path):
       train_log_header(config, args, run_dir)
       try:
-        results = train_head(config, args, run_dir)
+        if args.mode == "train-head":
+          results = train_head(config, args, run_dir)
+        else:
+          results = export_soft_labels(config, args, run_dir)
       except Exception as exc:
         failure = {
           "status": "failed",
@@ -603,7 +833,7 @@ def main() -> None:
           "log_path": str(log_path),
         }
         write_run(config, args.mode, failure, run_dir=run_dir)
-        print("=== Perch Head Training Failed ===")
+        print("=== Perch Teacher Run Failed ===")
         traceback.print_exc()
         print(f"Feedback log: {log_path}")
         raise
