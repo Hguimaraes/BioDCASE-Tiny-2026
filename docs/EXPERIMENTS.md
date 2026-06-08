@@ -154,6 +154,50 @@ The v3 model has about 250k trainable parameters. It evaluates the
 goal is to beat the MSS2D-v2 best validation accuracy of `0.5046`; the next
 larger goal is the pretrained baseline accuracy of about `0.5628`.
 
+## Mel + MSS Side-Channel
+
+This experiment keeps the baseline mel feature as the main branch and adds the
+v2 modulation-spectrum map as a side-channel branch.
+
+```text
+audio -> mel [1, 40, 133] -> mel CNN ----\
+                                          concat -> classifier
+audio -> MSS [1, 513, 150] -> MSS CNN ---/
+```
+
+The cache stores one flat vector per sample:
+
+```text
+mel size: 5,320
+MSS size: 76,950
+combined feature size: 82,270
+cache id: cache_mel_mss_v1
+```
+
+Fast local checks:
+
+```bash
+python3 -m experiments.run_mel_mss \
+  --mode feature-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+
+python3 -m experiments.run_mel_mss \
+  --mode model-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+Remote training command:
+
+```bash
+python3 -m experiments.run_mel_mss \
+  --mode train \
+  --dataset-root /path/to/biodcase2026_tinyML
+```
+
+The first side-channel model has 109,707 trainable parameters and evaluates the
+`best_accuracy` checkpoint. Send back the `train.log`, `run.yaml`, and
+`models/checkpoint_summary.yaml` from the run directory.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

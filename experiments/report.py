@@ -57,6 +57,18 @@ def display_columns(fields: list[str]) -> list[str]:
     "mss2d.evaluated_checkpoint",
     "mss2d.best_checkpoint_path",
     "mss2d.model_path",
+    "mel_mss.feature_shape",
+    "mel_mss.mel_shape",
+    "mel_mss.mss_shape",
+    "mel_mss.num_params",
+    "mel_mss.final_validation_accuracy",
+    "mel_mss.best_validation_accuracy",
+    "mel_mss.best_accuracy_epoch",
+    "mel_mss.early_stop_epoch",
+    "mel_mss.test_accuracy",
+    "mel_mss.evaluated_checkpoint",
+    "mel_mss.best_checkpoint_path",
+    "mel_mss.model_path",
   ]
   return [field for field in preferred if field in fields]
 
