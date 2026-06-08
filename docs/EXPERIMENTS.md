@@ -198,6 +198,53 @@ The first side-channel model has 109,707 trainable parameters and evaluates the
 `best_accuracy` checkpoint. Send back the `train.log`, `run.yaml`, and
 `models/checkpoint_summary.yaml` from the run directory.
 
+## Perch 2.0 Evaluation Scaffold
+
+Perch is not a deployable TinyML student for the ESP board, but it is useful as
+a research baseline and possible teacher. This branch keeps Perch work isolated
+from the PyTorch/TinyML environment because the Perch stack pulls JAX,
+TensorFlow, Apache Beam, and Perch-Hoplite dependencies.
+
+Create a separate environment:
+
+```bash
+python3.12 -m venv .venv-perch
+source .venv-perch/bin/activate
+pip install --upgrade pip
+pip install -r requirements_perch.txt
+```
+
+The local Perch repository declares Python `<3.12`, so Python 3.12 is a smoke
+test rather than a guaranteed supported path. Run preflight first:
+
+```bash
+python3 -m experiments.run_perch \
+  --mode preflight \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+Check that the BioDCASE labels have a direct mapping to Perch species labels:
+
+```bash
+python3 -m experiments.run_perch \
+  --mode label-map \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+If imports pass, run a lightweight Perch-Hoplite preset smoke check:
+
+```bash
+python3 -m experiments.run_perch \
+  --mode hoplite-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+The planned adaptation is to extract the Perch logits for the 10 bird species
+using scientific-name mapping. `Background` is not a species logit, so we will
+evaluate it as a complement/open-set score against the target bird classes
+before deciding whether direct Perch output is a fair baseline or whether we
+should train a small classifier on Perch embeddings.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

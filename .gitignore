@@ -13,6 +13,7 @@ submission/rank_submissions/results_task3_entries.yaml
 
 # virtual env
 .venv
+.venv-perch
 
 # python specific
 __pycache__

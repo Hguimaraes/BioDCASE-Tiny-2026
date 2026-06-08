@@ -69,6 +69,13 @@ def display_columns(fields: list[str]) -> list[str]:
     "mel_mss.evaluated_checkpoint",
     "mel_mss.best_checkpoint_path",
     "mel_mss.model_path",
+    "perch.imports_ok",
+    "perch.dataset_exists",
+    "perch.model_choice",
+    "perch.mapped_labels",
+    "perch.mapping_ok",
+    "perch.missing_modules",
+    "perch.status",
   ]
   return [field for field in preferred if field in fields]
 

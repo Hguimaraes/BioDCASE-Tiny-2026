@@ -1,0 +1,52 @@
+# Perch 2.0 / Perch-Hoplite evaluation scaffold.
+
+experiment:
+  id: perch2_eval
+  name: Perch 2.0 evaluation preflight
+  output_root: ./output/experiments
+
+dataset:
+  root_path: ${BIODCASE_DATASET_ROOT}
+
+perch:
+  repo_root: /home/hguimaraes/projects/perch
+  # Perch-Hoplite exposes released model presets. `perch_8` is the notebook
+  # default in the local Perch repo and is our first practical smoke target.
+  model_choice: perch_8
+  use_hoplite: true
+
+label_mapping:
+  Background:
+    scientific_name: null
+    common_name: Background
+    perch_strategy: complement_of_target_species
+  Common Chaffinch:
+    scientific_name: Fringilla coelebs
+    common_name: Common Chaffinch
+  Common Chiffchaff:
+    scientific_name: Phylloscopus collybita
+    common_name: Common Chiffchaff
+  Eurasian Blackbird:
+    scientific_name: Turdus merula
+    common_name: Eurasian Blackbird
+  Eurasian Blackcap:
+    scientific_name: Sylvia atricapilla
+    common_name: Eurasian Blackcap
+  Eurasian Blue Tit:
+    scientific_name: Cyanistes caeruleus
+    common_name: Eurasian Blue Tit
+  Great Spotted Woodpecker:
+    scientific_name: Dendrocopos major
+    common_name: Great Spotted Woodpecker
+  Great Tit:
+    scientific_name: Parus major
+    common_name: Great Tit
+  Mallard:
+    scientific_name: Anas platyrhynchos
+    common_name: Mallard
+  Song Thrush:
+    scientific_name: Turdus philomelos
+    common_name: Song Thrush
+  Tawny Owl:
+    scientific_name: Strix aluco
+    common_name: Tawny Owl

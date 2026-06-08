@@ -1,0 +1,27 @@
+# Optional Perch/Perch-Hoplite evaluation environment.
+#
+# Keep this separate from requirements_pytorch.txt. Perch pulls a large JAX /
+# TensorFlow stack and the upstream pyproject currently declares Python < 3.12,
+# so this file is for isolated smoke tests and teacher/evaluation experiments.
+
+numpy>=2.0,<2.1
+pandas
+scikit-learn
+soundfile
+librosa
+tqdm
+matplotlib
+PyYAML
+
+jax
+flax
+optax
+chex
+clu
+ml-collections
+etils
+tensorflow
+tf-keras
+apache-beam[gcp]
+aqtp
+git+https://github.com/google-research/perch-hoplite.git@v0.1.1
