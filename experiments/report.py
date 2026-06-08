@@ -76,6 +76,12 @@ def display_columns(fields: list[str]) -> list[str]:
     "perch.mapping_ok",
     "perch.missing_modules",
     "perch.status",
+    "perch.train.validation_accuracy",
+    "perch.train.validation_roc_auc_macro_ovr",
+    "perch.train.num_epochs",
+    "perch.train.dataset_lengths",
+    "perch.train.max_files_per_class",
+    "perch.train.model_path",
   ]
   return [field for field in preferred if field in fields]
 

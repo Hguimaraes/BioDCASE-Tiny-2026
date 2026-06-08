@@ -259,6 +259,29 @@ evaluate it as a complement/open-set score against the target bird classes
 before deciding whether direct Perch output is a fair baseline or whether we
 should train a small classifier on Perch embeddings.
 
+Local frozen-Perch embedding head run:
+
+```bash
+source .venv-perch/bin/activate
+python3 -m experiments.run_perch \
+  --mode train-head \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML \
+  --num-epochs 10
+```
+
+For a CPU smoke run, cap each class per split:
+
+```bash
+python3 -m experiments.run_perch \
+  --mode train-head \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML \
+  --num-epochs 10 \
+  --max-files-per-class 2
+```
+
+This trains only a small dense classifier head on cached frozen Perch
+embeddings. It does not fine-tune Perch and is not intended for deployment.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:
