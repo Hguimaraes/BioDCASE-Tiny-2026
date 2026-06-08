@@ -1,0 +1,27 @@
+# Optional Perch/Perch-Hoplite dependencies for Compute Canada clusters.
+#
+# Compute Canada currently exposes patched NumPy wheels such as
+# 2.1.1+computecanada, but not upstream NumPy 2.0.x. Perch-Hoplite 0.1.1
+# declares numpy>=2.0,<2.1, so install this file first and then install
+# Perch-Hoplite with --no-deps as documented in docs/EXPERIMENTS.md.
+
+numpy==2.1.1+computecanada
+pandas
+scikit-learn
+soundfile
+librosa
+tqdm
+matplotlib
+PyYAML
+
+jax
+flax
+optax
+chex
+clu
+ml-collections
+etils
+tensorflow
+tf-keras
+apache-beam[gcp]
+aqtp

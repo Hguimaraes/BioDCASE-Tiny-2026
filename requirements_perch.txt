@@ -3,6 +3,10 @@
 # Keep this separate from requirements_pytorch.txt. Perch pulls a large JAX /
 # TensorFlow stack and the upstream pyproject currently declares Python < 3.12,
 # so this file is for isolated smoke tests and teacher/evaluation experiments.
+#
+# If your package index does not provide NumPy 2.0.x, use
+# requirements_perch_cluster.txt and the two-step Perch-Hoplite install in
+# docs/EXPERIMENTS.md.
 
 numpy>=2.0,<2.1
 pandas

@@ -214,6 +214,20 @@ pip install --upgrade pip
 pip install -r requirements_perch.txt
 ```
 
+On Compute Canada, the package index may only expose patched NumPy wheels such
+as `2.1.1+computecanada` and not the upstream `2.0.x` wheels required by
+Perch-Hoplite metadata. In that case, use the cluster requirements file and
+install Perch-Hoplite without dependency resolution after the rest of the stack
+is installed:
+
+```bash
+python3.12 -m venv .venv-perch
+source .venv-perch/bin/activate
+pip install --upgrade pip
+pip install -r requirements_perch_cluster.txt
+pip install --no-deps git+https://github.com/google-research/perch-hoplite.git@v0.1.1
+```
+
 The local Perch repository declares Python `<3.12`, so Python 3.12 is a smoke
 test rather than a guaranteed supported path. Run preflight first:
 
