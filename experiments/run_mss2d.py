@@ -78,7 +78,7 @@ def training_log_header(config: dict[str, Any], args: argparse.Namespace, run_di
     "host": {
       "platform": platform.platform(),
       "python": platform.python_version(),
-      "torch": torch.__version__,
+      "torch": str(torch.__version__),
       "cuda_available": torch.cuda.is_available(),
       "cuda_device_count": torch.cuda.device_count(),
       "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
@@ -280,6 +280,7 @@ def train(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     "training_history": getattr(model, "training_history", []),
     "final_epoch": getattr(model, "training_history", [])[-1] if getattr(model, "training_history", []) else None,
     "test_metrics": getattr(model, "test_metrics", {}),
+    "best_checkpoints": getattr(model, "best_checkpoints", {}),
   }
 
 
@@ -305,6 +306,15 @@ def write_run(config: dict[str, Any], mode: str, results: dict[str, Any], run_di
     "mss2d.test_accuracy": (
       results.get("test_metrics") or {}
     ).get("test_accuracy"),
+    "mss2d.best_validation_accuracy": (
+      (results.get("best_checkpoints") or {}).get("best_accuracy") or {}
+    ).get("validation_accuracy"),
+    "mss2d.best_accuracy_epoch": (
+      (results.get("best_checkpoints") or {}).get("best_accuracy") or {}
+    ).get("epoch"),
+    "mss2d.best_checkpoint_path": (
+      (results.get("best_checkpoints") or {}).get("best_accuracy") or {}
+    ).get("path"),
   }
   runtime.append_summary(row, config)
   return run_dir

@@ -50,7 +50,10 @@ def display_columns(fields: list[str]) -> list[str]:
     "mss2d.feature_shape",
     "mss2d.num_params",
     "mss2d.final_validation_accuracy",
+    "mss2d.best_validation_accuracy",
+    "mss2d.best_accuracy_epoch",
     "mss2d.test_accuracy",
+    "mss2d.best_checkpoint_path",
     "mss2d.model_path",
   ]
   return [field for field in preferred if field in fields]

@@ -17,9 +17,9 @@ training_config_overrides:
     dataset:
       root_path: ${BIODCASE_DATASET_ROOT}
     intermediate:
-      intermediate_id: intermediate_mss2d_v1
+      intermediate_id: intermediate_mss2d_v2
     caching:
-      cache_id: cache_mss2d_v1
+      cache_id: cache_mss2d_v2
     feature_extraction:
       target_sample_rate: 24000
       mss_n_fft1: 1024
@@ -28,6 +28,9 @@ training_config_overrides:
       mss_win_shift: 240
       log_scale: true
       normalize_features: true
+      normalize_method: zscore
+      percentile_clip: [0.5, 99.5]
+      modulation_dc_mode: drop
       resize_shape: null
     feature_handler_add_kwargs:
       add_channel_dimension: true

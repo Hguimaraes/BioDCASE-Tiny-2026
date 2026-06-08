@@ -23,6 +23,9 @@ class ModulationSpectrum2DFeatureHandler:
       "mss_win_shift": 240,
       "log_scale": True,
       "normalize_features": True,
+      "normalize_method": "minmax",
+      "percentile_clip": None,
+      "modulation_dc_mode": "keep",
       "eps": 1e-8,
       "resize_shape": None,
       "add_channel_dimension": True,
@@ -37,6 +40,9 @@ class ModulationSpectrum2DFeatureHandler:
     if self.cfg["log_scale"]:
       features = torch.log1p(features)
 
+    features = self._process_modulation_dc(features)
+    features = self._clip_percentiles(features)
+
     resize_shape = self.cfg.get("resize_shape")
     if resize_shape is not None:
       features = F.interpolate(
@@ -47,14 +53,53 @@ class ModulationSpectrum2DFeatureHandler:
       ).squeeze(0).squeeze(0)
 
     if self.cfg["normalize_features"]:
-      x_min = features.amin()
-      x_range = features.amax() - x_min
-      features = (features - x_min) / torch.clamp(x_range, min=self.cfg["eps"])
+      features = self._normalize_features(features)
 
     out = features.cpu().numpy().astype(np.float32)
     if self.cfg["add_channel_dimension"]:
       out = out[np.newaxis, :]
     return out
+
+  def _process_modulation_dc(self, features: torch.Tensor) -> torch.Tensor:
+    mode = self.cfg.get("modulation_dc_mode", "keep")
+    if mode == "keep":
+      return features
+    if mode == "drop":
+      return features[:, 1:]
+    if mode == "zero":
+      features = features.clone()
+      features[:, 0] = 0.0
+      return features
+    raise ValueError(f"Unsupported modulation_dc_mode: {mode}")
+
+  def _clip_percentiles(self, features: torch.Tensor) -> torch.Tensor:
+    percentile_clip = self.cfg.get("percentile_clip")
+    if percentile_clip is None:
+      return features
+    low, high = percentile_clip
+    if low is None and high is None:
+      return features
+    flat = features.flatten()
+    min_value = torch.quantile(flat, float(low) / 100.0) if low is not None else features.amin()
+    max_value = torch.quantile(flat, float(high) / 100.0) if high is not None else features.amax()
+    return torch.clamp(features, min=min_value, max=max_value)
+
+  def _normalize_features(self, features: torch.Tensor) -> torch.Tensor:
+    method = self.cfg.get("normalize_method", "minmax")
+    eps = self.cfg["eps"]
+    if method == "none":
+      return features
+    if method == "minmax":
+      x_min = features.amin()
+      x_range = features.amax() - x_min
+      return (features - x_min) / torch.clamp(x_range, min=eps)
+    if method == "zscore":
+      return (features - features.mean()) / torch.clamp(features.std(), min=eps)
+    if method == "robust_zscore":
+      median = features.median()
+      mad = (features - median).abs().median()
+      return (features - median) / torch.clamp(1.4826 * mad, min=eps)
+    raise ValueError(f"Unsupported normalize_method: {method}")
 
   def _to_waveform_tensor(self, x) -> torch.Tensor:
     if not isinstance(x, np.ndarray):

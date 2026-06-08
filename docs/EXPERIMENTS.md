@@ -72,10 +72,12 @@ All experiments should produce a YAML run record and a CSV summary row.
 ## MSS 2D Input Experiment
 
 This experiment keeps the full BioME-style modulation spectrum map instead of
-averaging over the acoustic-frequency and modulation-frequency axes.
+averaging over the acoustic-frequency and modulation-frequency axes. The v2
+preprocessing drops the modulation DC bin, clips extreme values, and applies
+per-sample z-score normalization.
 
 ```text
-waveform -> STFT power -> amplitude envelope -> FFT over time -> [1, 513, 151]
+waveform -> STFT power -> amplitude envelope -> FFT over time -> [1, 513, 150]
 ```
 
 Fast local checks:
@@ -94,7 +96,7 @@ python3 -m experiments.run_mss2d \
   --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
 ```
 
-The current feature-smoke result is `[1, 513, 151]`. The current MSS-only
+The current feature-smoke result is `[1, 513, 150]`. The current MSS-only
 TinyCNN has 62,923 trainable parameters.
 
 Remote training command:
@@ -104,8 +106,19 @@ BIODCASE_DATASET_ROOT=/path/to/biodcase2026_tinyML \
 python3 -m experiments.run_mss2d --mode train
 ```
 
-Training uses `cache_mss2d_v1`, so it will not mix with the baseline mel cache.
+Training uses `cache_mss2d_v2`, so it will not mix with the baseline mel cache
+or the first MSS cache.
 Model checkpoints and run records are written under ignored `output/`.
+
+The trainer saves the final model and best checkpoints under the run's model
+directory:
+
+```text
+output/experiments/mss2d_input/<timestamp>_train/models/MSS2DTinyCNN.pth
+output/experiments/mss2d_input/<timestamp>_train/models/MSS2DTinyCNN_best_accuracy.pth
+output/experiments/mss2d_input/<timestamp>_train/models/MSS2DTinyCNN_best_loss.pth
+output/experiments/mss2d_input/<timestamp>_train/models/checkpoint_summary.yaml
+```
 
 Each training run writes a single feedback log:
 

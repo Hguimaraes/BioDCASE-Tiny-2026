@@ -29,6 +29,18 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
 
   # history
   history = []
+  best_accuracy = {
+    'epoch': None,
+    'validation_accuracy': -float('inf'),
+    'validation_loss': None,
+    'path': str(model.get_model_file_path().with_name(model.get_model_file_path().stem + '_best_accuracy.pth')),
+  }
+  best_loss = {
+    'epoch': None,
+    'validation_accuracy': None,
+    'validation_loss': float('inf'),
+    'path': str(model.get_model_file_path().with_name(model.get_model_file_path().stem + '_best_loss.pth')),
+  }
 
   # epochs
   for epoch in range(cfg['model_training']['num_epochs']):
@@ -83,6 +95,24 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
       'validation_accuracy': validation_accuracy,
     })
 
+    if validation_accuracy > best_accuracy['validation_accuracy']:
+      best_accuracy.update({
+        'epoch': epoch + 1,
+        'validation_accuracy': validation_accuracy,
+        'validation_loss': validation_loss,
+      })
+      torch.save(model.state_dict(), best_accuracy['path'])
+      print("  saved best-accuracy checkpoint: {}".format(best_accuracy['path']))
+
+    if validation_loss < best_loss['validation_loss']:
+      best_loss.update({
+        'epoch': epoch + 1,
+        'validation_accuracy': validation_accuracy,
+        'validation_loss': validation_loss,
+      })
+      torch.save(model.state_dict(), best_loss['path'])
+      print("  saved best-loss checkpoint: {}".format(best_loss['path']))
+
     # epoch info
     print("Epoch {:03} - train loss: {:.4f}, val: [loss: {:.4f}, acc: {:.4f}]".format(epoch + 1, train_loss, validation_loss, validation_accuracy))
 
@@ -94,6 +124,21 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
 
   # save also label dict
   yaml.dump({'label_dict': label_dict}, open(Path(model.get_save_path()) / 'label_dict.yaml', 'w'))
+  yaml.dump(
+    {
+      'best_accuracy': best_accuracy,
+      'best_loss': best_loss,
+      'final_model_path': str(model.get_model_file_path()),
+    },
+    open(Path(model.get_save_path()) / 'checkpoint_summary.yaml', 'w'),
+  )
+
+  model.best_checkpoints = {
+    'best_accuracy': best_accuracy,
+    'best_loss': best_loss,
+    'final_model_path': str(model.get_model_file_path()),
+    'checkpoint_summary_path': str(Path(model.get_save_path()) / 'checkpoint_summary.yaml'),
+  }
 
   return history
 
@@ -163,10 +208,11 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
   model_class = getattr(importlib.import_module(cfg_framework['model']['module']), cfg_framework['model']['attr'])
 
   # model kwargs
-  model_kwargs_overwrite = {'input_shape': input_shape, 'num_classes': len(datamodule_train.get_label_dict()), 'save_path': str(MODELS_DIR)}
+  model_kwargs_defaults = {'save_path': str(MODELS_DIR)}
+  model_kwargs_overwrite = {'input_shape': input_shape, 'num_classes': len(datamodule_train.get_label_dict())}
 
   # model
-  model = model_class(*cfg_framework['model']['args'], **{**cfg_framework['model']['kwargs'], **model_kwargs_overwrite})
+  model = model_class(*cfg_framework['model']['args'], **{**model_kwargs_defaults, **cfg_framework['model']['kwargs'], **model_kwargs_overwrite})
 
   # summary
   summary(model, input_size=input_shape, device=model.get_device_type_str())
