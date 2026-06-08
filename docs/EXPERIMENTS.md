@@ -428,6 +428,27 @@ This is the first run that tests whether temporal attention can close part of
 the gap between the 0.6248 logit-distilled Mel+MSS student and the 0.845 Perch
 teacher.
 
+The first SED run improved to `0.6339`, but validation accuracy was much noisier
+than the global-pooled logit-distilled student. The best epoch was `63`, while
+the run stopped at epoch `88`; after epoch `55`, validation accuracy had about
+`0.04` mean absolute epoch-to-epoch movement and several jumps near `0.09`.
+
+Stabilized follow-up config:
+
+```bash
+PERCH_TEACHER_SOFT_LABELS=/path/to/teacher_soft_labels.npz \
+python3 -m experiments.run_mel_mss_distill \
+  --config experiments/configs/mel_mss_sed_logit_distill_v2_stable.yaml \
+  --mode train \
+  --dataset-root /path/to/biodcase2026_tinyML
+```
+
+This variant keeps the same architecture and cache, but lowers LR, increases
+dropout/weight decay, reduces the frame-max loss weight, removes frame-max KL,
+clips gradients more tightly, and enables `ReduceLROnPlateau` on validation loss.
+The goal is not just a higher best checkpoint, but a less jumpy validation curve
+so the selected checkpoint is more trustworthy.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

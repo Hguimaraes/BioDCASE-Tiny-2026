@@ -66,6 +66,14 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     'best_epoch': None,
     'best_value': None,
   }
+  scheduler_cfg = cfg['model_training'].get('lr_scheduler', {})
+  scheduler = None
+  if scheduler_cfg.get('enabled', False):
+    scheduler = getattr(
+      importlib.import_module(scheduler_cfg.get('module', 'torch.optim.lr_scheduler')),
+      scheduler_cfg['attr'],
+    )(model.optimizer, **scheduler_cfg.get('kwargs', {}))
+  scheduler_monitor = scheduler_cfg.get('monitor', 'validation_loss')
 
   # epochs
   for epoch in range(cfg['model_training']['num_epochs']):
@@ -124,6 +132,7 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
       'train_loss': train_loss,
       'validation_loss': validation_loss,
       'validation_accuracy': validation_accuracy,
+      'learning_rate': float(model.optimizer.param_groups[0]['lr']),
     }
     history_entry.update({
       'train_{}'.format(metric_name): float(np.mean(metric_values))
@@ -152,6 +161,12 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
       })
       torch.save(model.state_dict(), best_loss['path'])
       print("  saved best-loss checkpoint: {}".format(best_loss['path']))
+
+    if scheduler is not None:
+      if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        scheduler.step(history_entry[scheduler_monitor])
+      else:
+        scheduler.step()
 
     # epoch info
     extra_metrics = {
