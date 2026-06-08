@@ -367,6 +367,67 @@ Experiment ideas to revisit after this run:
    embedding-MSE variants are measured, because a very small student may need
    classification gradients in the encoder.
 
+## SED-Style Mel + MSS Distillation
+
+The next architecture keeps the same Mel+MSS feature cache but changes the
+student from global pooled clip classification to a lightweight SED-style
+temporal classifier.
+
+```text
+mel [1, 40, 133]
+  -> frequency-downsampling CNN, time preserved
+  -> temporal features [channels, frames]
+
+MSS [1, 513, 150]
+  -> compact CNN
+  -> global context vector
+  -> broadcast over mel frames
+
+concat temporal mel + MSS context
+  -> 1x1 temporal bottleneck
+  -> framewise logits [classes, frames]
+  -> learned attention over frames
+  -> clip logits [classes]
+```
+
+Training loss:
+
+```text
+hard_loss = 0.5 * CE(clip_logits, y) + 0.5 * CE(frame_max_logits, y)
+soft_loss = 0.5 * KL(clip_logits/T, teacher/T)
+          + 0.5 * KL(frame_max_logits/T, teacher/T)
+loss = hard_loss + 0.5 * soft_loss
+T = 2.0
+```
+
+The framewise and attention outputs are training internals. The model's normal
+`forward()` returns only clip logits, so the exported inference path remains a
+single 11-class classifier.
+
+Fast local smoke:
+
+```bash
+PERCH_TEACHER_SOFT_LABELS=output/experiments/perch2_eval/20260608_073215_train-head/teacher_soft_labels.npz \
+python3 -m experiments.run_mel_mss_distill \
+  --config experiments/configs/mel_mss_sed_logit_distill.yaml \
+  --mode model-smoke \
+  --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
+```
+
+Remote training command:
+
+```bash
+PERCH_TEACHER_SOFT_LABELS=/path/to/teacher_soft_labels.npz \
+python3 -m experiments.run_mel_mss_distill \
+  --config experiments/configs/mel_mss_sed_logit_distill.yaml \
+  --mode train \
+  --dataset-root /path/to/biodcase2026_tinyML
+```
+
+This is the first run that tests whether temporal attention can close part of
+the gap between the 0.6248 logit-distilled Mel+MSS student and the 0.845 Perch
+teacher.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:
