@@ -76,6 +76,8 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     # epoch loss
     epoch_train_loss = []
     epoch_validation_loss = []
+    epoch_train_metrics = {}
+    epoch_validation_metrics = {}
 
     # train loader
     for data in dataloader_train: 
@@ -85,6 +87,8 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
 
       # loss update
       epoch_train_loss.append(loss)
+      for metric_name, metric_value in getattr(model, 'last_train_step_metrics', {}).items():
+        epoch_train_metrics.setdefault(metric_name, []).append(float(metric_value))
 
     # evaluation mode
     model.set_model_to_evaluation_mode()
@@ -108,17 +112,28 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
 
       # loss update
       epoch_validation_loss.append(loss)
+      for metric_name, metric_value in getattr(model, 'last_validation_step_metrics', {}).items():
+        epoch_validation_metrics.setdefault(metric_name, []).append(float(metric_value))
 
     # epoch metrics
     train_loss = float(np.mean(epoch_train_loss))
     validation_loss = float(np.mean(epoch_validation_loss))
     validation_accuracy = float(np.mean(y_targets == y_predictions))
-    history.append({
+    history_entry = {
       'epoch': epoch + 1,
       'train_loss': train_loss,
       'validation_loss': validation_loss,
       'validation_accuracy': validation_accuracy,
+    }
+    history_entry.update({
+      'train_{}'.format(metric_name): float(np.mean(metric_values))
+      for metric_name, metric_values in epoch_train_metrics.items()
     })
+    history_entry.update({
+      'validation_{}'.format(metric_name): float(np.mean(metric_values))
+      for metric_name, metric_values in epoch_validation_metrics.items()
+    })
+    history.append(history_entry)
 
     if validation_accuracy > best_accuracy['validation_accuracy']:
       best_accuracy.update({
@@ -139,7 +154,13 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
       print("  saved best-loss checkpoint: {}".format(best_loss['path']))
 
     # epoch info
-    print("Epoch {:03} - train loss: {:.4f}, val: [loss: {:.4f}, acc: {:.4f}]".format(epoch + 1, train_loss, validation_loss, validation_accuracy))
+    extra_metrics = {
+      k: v
+      for k, v in history_entry.items()
+      if k not in ['epoch', 'train_loss', 'validation_loss', 'validation_accuracy']
+    }
+    extra_metrics_str = "".join([", {}: {:.4f}".format(k, v) for k, v in extra_metrics.items()])
+    print("Epoch {:03} - train loss: {:.4f}, val: [loss: {:.4f}, acc: {:.4f}]{}".format(epoch + 1, train_loss, validation_loss, validation_accuracy, extra_metrics_str))
 
     if early_enabled:
       monitored_value = history[-1][early_monitor]

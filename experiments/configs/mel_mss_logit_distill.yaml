@@ -1,0 +1,106 @@
+# Mel spectrogram plus MSS side-channel with Perch teacher logit distillation.
+
+experiment:
+  id: mel_mss_logit_distill
+  name: Mel plus modulation spectrum side-channel with Perch logit distillation
+  output_root: ./output/experiments
+
+base_config: ./config.yaml
+
+dataset:
+  root_path: ${BIODCASE_DATASET_ROOT}
+
+distillation:
+  teacher_soft_labels_path: ${PERCH_TEACHER_SOFT_LABELS}
+
+training_config_overrides:
+  skip_deployment_flag: true
+
+  datamodule:
+    dataset:
+      root_path: ${BIODCASE_DATASET_ROOT}
+    intermediate:
+      intermediate_id: intermediate_mel_mss_v1
+    caching:
+      cache_id: cache_mel_mss_v1
+    feature_extraction:
+      window_len: 4096
+      window_stride: 512
+      window_scaling_bits: 12
+      mel_n_channels: 40
+      mel_low_hz: 125
+      mel_high_hz: 7500
+      mel_post_scaling_bits: 6
+    feature_handler_add_kwargs:
+      target_sample_rate: 24000
+      transpose_features_extracted: true
+      normalize_features: true
+      to_float: true
+      add_channel_dimension: true
+      add_batch_dimension: false
+      channel_dimension_at_end: false
+    mss_feature_extraction:
+      target_sample_rate: 24000
+      mss_n_fft1: 1024
+      mss_n_fft2: null
+      mss_win_size: 600
+      mss_win_shift: 240
+      log_scale: true
+      normalize_features: true
+      normalize_method: zscore
+      percentile_clip: [0.5, 99.5]
+      modulation_dc_mode: drop
+      resize_shape: null
+    mss_feature_handler_add_kwargs:
+      add_channel_dimension: true
+    redo_cache: false
+    redo_intermediate: false
+
+  pytorch_framework:
+    dataloader_train_kwargs:
+      batch_size: 32
+      shuffle: true
+    dataloader_validation_and_test_kwargs:
+      batch_size: 32
+      shuffle: false
+    model:
+      module: pipeline_pytorch.model_mel_mss
+      attr: MelMSSLogitDistillationCNN
+      args: []
+      kwargs:
+        model_name: MelMSSLogitDistillationCNN
+        mel_shape: [1, 40, 133]
+        mss_shape: [1, 513, 150]
+        mel_filters: 32
+        mss_filters: 8
+        fusion_hidden_dim: 64
+        dropout: 0.2
+        distillation:
+          hard_loss_weight: 1.0
+          soft_loss_weight: 0.5
+          temperature: 2.0
+          gradient_clip_norm: 1.0
+        device:
+          use_cpu: false
+          device_name: cuda:0
+        criterion:
+          module: torch.nn
+          attr: CrossEntropyLoss
+          kwargs: {}
+        optimizer:
+          module: torch.optim
+          attr: AdamW
+          kwargs:
+            lr: 0.0005
+            weight_decay: 0.0001
+            betas: [0.9, 0.999]
+        verbose: false
+    model_training:
+      num_epochs: 100
+      evaluate_checkpoint: best_accuracy
+      early_stopping:
+        enabled: true
+        monitor: validation_accuracy
+        mode: max
+        patience: 15
+        min_delta: 0.001

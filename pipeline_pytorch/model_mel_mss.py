@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 
 if __name__ == "__main__":
@@ -89,3 +90,74 @@ class MelMSSSideChannelCNN(ModelBase):
     mss_embedding = self.mss_branch(mss)
     fused = torch.cat([mel_embedding, mss_embedding], dim=1)
     return self.classifier(fused)
+
+
+class MelMSSLogitDistillationCNN(MelMSSSideChannelCNN):
+  """Mel+MSS student trained with hard labels plus teacher logit distillation."""
+
+  def distillation_cfg(self):
+    return {
+      "hard_loss_weight": 1.0,
+      "soft_loss_weight": 0.5,
+      "temperature": 2.0,
+      "gradient_clip_norm": None,
+      **self.cfg.get("distillation", {}),
+    }
+
+  def compute_losses(self, y_hat, y, teacher_logits=None):
+    hard_loss = self.criterion(y_hat, y)
+    cfg = self.distillation_cfg()
+    soft_weight = float(cfg["soft_loss_weight"])
+    if teacher_logits is None or soft_weight <= 0:
+      return hard_loss, {
+        "total_loss": float(hard_loss.detach().cpu()),
+        "hard_loss": float(hard_loss.detach().cpu()),
+        "soft_loss": 0.0,
+      }
+
+    temperature = float(cfg["temperature"])
+    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
+    student_log_probs = F.log_softmax(y_hat / temperature, dim=1)
+    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (temperature ** 2)
+    total_loss = float(cfg["hard_loss_weight"]) * hard_loss + soft_weight * soft_loss
+    return total_loss, {
+      "total_loss": float(total_loss.detach().cpu()),
+      "hard_loss": float(hard_loss.detach().cpu()),
+      "soft_loss": float(soft_loss.detach().cpu()),
+    }
+
+  def train_step(self, data):
+    self.optimizer.zero_grad()
+
+    x = data[0].to(device=self.device, dtype=torch.float32)
+    y = data[1].to(device=self.device)
+    teacher_logits = None
+    if len(data) > 3:
+      teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
+
+    y_hat = self.forward(x)
+    loss, metrics = self.compute_losses(y_hat, y, teacher_logits)
+    loss.backward()
+
+    clip_norm = self.distillation_cfg().get("gradient_clip_norm")
+    if clip_norm is not None:
+      torch.nn.utils.clip_grad_norm_(self.parameters(), float(clip_norm))
+
+    self.optimizer.step()
+    self.last_train_step_metrics = metrics
+    return loss.item()
+
+  def validation_step(self, data):
+    with torch.no_grad():
+      x = data[0].to(device=self.device, dtype=torch.float32)
+      y = data[1].to(device=self.device)
+      teacher_logits = None
+      if len(data) > 3:
+        teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
+
+      y_hat = self.forward(x)
+      loss, metrics = self.compute_losses(y_hat, y, teacher_logits)
+      self.last_validation_step_metrics = metrics
+      y_hat = self.prediction_post_processing(y_hat)
+
+    return y_hat, loss.item()

@@ -47,6 +47,11 @@ class Tee:
     for stream in self.streams:
       stream.flush()
 
+  def close(self):
+    # absl logging may call close() on sys.stderr at interpreter shutdown.
+    # The real streams are owned by the process, so keep this as a no-op.
+    pass
+
 
 @contextlib.contextmanager
 def tee_to_file(path: Path):
