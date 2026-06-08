@@ -104,8 +104,27 @@ class MelMSSLogitDistillationCNN(MelMSSSideChannelCNN):
       **self.cfg.get("distillation", {}),
     }
 
-  def compute_losses(self, y_hat, y, teacher_logits=None):
-    hard_loss = self.criterion(y_hat, y)
+  def unpack_batch(self, data):
+    x = data[0].to(device=self.device, dtype=torch.float32)
+    y = data[1].to(device=self.device)
+    teacher_logits = data[3].to(device=self.device, dtype=torch.float32) if len(data) > 3 else None
+    return x, y, teacher_logits
+
+  def teacher_kl_loss(self, student_logits, teacher_logits):
+    temperature = float(self.distillation_cfg()["temperature"])
+    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
+    student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
+    return F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (temperature ** 2)
+
+  def forward_for_loss(self, x):
+    return self.forward(x)
+
+  def logits_for_prediction(self, output):
+    return output
+
+  def compute_losses(self, output, y, teacher_logits=None):
+    logits = self.logits_for_prediction(output)
+    hard_loss = self.criterion(logits, y)
     cfg = self.distillation_cfg()
     soft_weight = float(cfg["soft_loss_weight"])
     if teacher_logits is None or soft_weight <= 0:
@@ -115,10 +134,7 @@ class MelMSSLogitDistillationCNN(MelMSSSideChannelCNN):
         "soft_loss": 0.0,
       }
 
-    temperature = float(cfg["temperature"])
-    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
-    student_log_probs = F.log_softmax(y_hat / temperature, dim=1)
-    soft_loss = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (temperature ** 2)
+    soft_loss = self.teacher_kl_loss(logits, teacher_logits)
     total_loss = float(cfg["hard_loss_weight"]) * hard_loss + soft_weight * soft_loss
     return total_loss, {
       "total_loss": float(total_loss.detach().cpu()),
@@ -128,15 +144,9 @@ class MelMSSLogitDistillationCNN(MelMSSSideChannelCNN):
 
   def train_step(self, data):
     self.optimizer.zero_grad()
-
-    x = data[0].to(device=self.device, dtype=torch.float32)
-    y = data[1].to(device=self.device)
-    teacher_logits = None
-    if len(data) > 3:
-      teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
-
-    y_hat = self.forward(x)
-    loss, metrics = self.compute_losses(y_hat, y, teacher_logits)
+    x, y, teacher_logits = self.unpack_batch(data)
+    output = self.forward_for_loss(x)
+    loss, metrics = self.compute_losses(output, y, teacher_logits)
     loss.backward()
 
     clip_norm = self.distillation_cfg().get("gradient_clip_norm")
@@ -149,16 +159,11 @@ class MelMSSLogitDistillationCNN(MelMSSSideChannelCNN):
 
   def validation_step(self, data):
     with torch.no_grad():
-      x = data[0].to(device=self.device, dtype=torch.float32)
-      y = data[1].to(device=self.device)
-      teacher_logits = None
-      if len(data) > 3:
-        teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
-
-      y_hat = self.forward(x)
-      loss, metrics = self.compute_losses(y_hat, y, teacher_logits)
+      x, y, teacher_logits = self.unpack_batch(data)
+      output = self.forward_for_loss(x)
+      loss, metrics = self.compute_losses(output, y, teacher_logits)
       self.last_validation_step_metrics = metrics
-      y_hat = self.prediction_post_processing(y_hat)
+      y_hat = self.prediction_post_processing(self.logits_for_prediction(output))
 
     return y_hat, loss.item()
 
@@ -254,7 +259,14 @@ class MelMSSSEDLogitDistillationCNN(MelMSSLogitDistillationCNN):
       return clip_logits, framewise_logits
     return clip_logits
 
-  def compute_sed_losses(self, clip_logits, framewise_logits, y, teacher_logits=None):
+  def forward_for_loss(self, x):
+    return self.forward(x, return_framewise=True)
+
+  def logits_for_prediction(self, output):
+    return output[0] if isinstance(output, tuple) else output
+
+  def compute_losses(self, output, y, teacher_logits=None):
+    clip_logits, framewise_logits = output
     cfg = self.distillation_cfg()
     frame_max_logits = framewise_logits.max(dim=-1).values
     clip_hard_loss = self.criterion(clip_logits, y)
@@ -265,14 +277,10 @@ class MelMSSSEDLogitDistillationCNN(MelMSSLogitDistillationCNN):
     soft_weight = float(cfg["soft_loss_weight"])
     soft_loss = clip_logits.new_tensor(0.0)
     if teacher_logits is not None and soft_weight > 0:
-      temperature = float(cfg["temperature"])
-      teacher_probs = F.softmax(teacher_logits / temperature, dim=1)
-      clip_log_probs = F.log_softmax(clip_logits / temperature, dim=1)
-      clip_soft_loss = F.kl_div(clip_log_probs, teacher_probs, reduction="batchmean") * (temperature ** 2)
+      clip_soft_loss = self.teacher_kl_loss(clip_logits, teacher_logits)
       frame_soft_loss = clip_soft_loss
       if cfg.get("distill_frame_max", True):
-        frame_log_probs = F.log_softmax(frame_max_logits / temperature, dim=1)
-        frame_soft_loss = F.kl_div(frame_log_probs, teacher_probs, reduction="batchmean") * (temperature ** 2)
+        frame_soft_loss = self.teacher_kl_loss(frame_max_logits, teacher_logits)
       soft_loss = (1.0 - frame_loss_weight) * clip_soft_loss + frame_loss_weight * frame_soft_loss
 
     total_loss = float(cfg["hard_loss_weight"]) * hard_loss + soft_weight * soft_loss
@@ -283,39 +291,3 @@ class MelMSSSEDLogitDistillationCNN(MelMSSLogitDistillationCNN):
       "clip_hard_loss": float(clip_hard_loss.detach().cpu()),
       "frame_hard_loss": float(frame_hard_loss.detach().cpu()),
     }
-
-  def train_step(self, data):
-    self.optimizer.zero_grad()
-
-    x = data[0].to(device=self.device, dtype=torch.float32)
-    y = data[1].to(device=self.device)
-    teacher_logits = None
-    if len(data) > 3:
-      teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
-
-    clip_logits, framewise_logits = self.forward(x, return_framewise=True)
-    loss, metrics = self.compute_sed_losses(clip_logits, framewise_logits, y, teacher_logits)
-    loss.backward()
-
-    clip_norm = self.distillation_cfg().get("gradient_clip_norm")
-    if clip_norm is not None:
-      torch.nn.utils.clip_grad_norm_(self.parameters(), float(clip_norm))
-
-    self.optimizer.step()
-    self.last_train_step_metrics = metrics
-    return loss.item()
-
-  def validation_step(self, data):
-    with torch.no_grad():
-      x = data[0].to(device=self.device, dtype=torch.float32)
-      y = data[1].to(device=self.device)
-      teacher_logits = None
-      if len(data) > 3:
-        teacher_logits = data[3].to(device=self.device, dtype=torch.float32)
-
-      clip_logits, framewise_logits = self.forward(x, return_framewise=True)
-      loss, metrics = self.compute_sed_losses(clip_logits, framewise_logits, y, teacher_logits)
-      self.last_validation_step_metrics = metrics
-      y_hat = self.prediction_post_processing(clip_logits)
-
-    return y_hat, loss.item()

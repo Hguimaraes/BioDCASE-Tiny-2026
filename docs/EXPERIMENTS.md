@@ -393,10 +393,9 @@ concat temporal mel + MSS context
 Training loss:
 
 ```text
-hard_loss = 0.5 * CE(clip_logits, y) + 0.5 * CE(frame_max_logits, y)
-soft_loss = 0.5 * KL(clip_logits/T, teacher/T)
-          + 0.5 * KL(frame_max_logits/T, teacher/T)
-loss = hard_loss + 0.5 * soft_loss
+hard_loss = 0.75 * CE(clip_logits, y) + 0.25 * CE(frame_max_logits, y)
+soft_loss = KL(clip_logits/T, teacher/T)
+loss = hard_loss + 0.35 * soft_loss
 T = 2.0
 ```
 
@@ -409,7 +408,6 @@ Fast local smoke:
 ```bash
 PERCH_TEACHER_SOFT_LABELS=output/experiments/perch2_eval/20260608_073215_train-head/teacher_soft_labels.npz \
 python3 -m experiments.run_mel_mss_distill \
-  --config experiments/configs/mel_mss_sed_logit_distill.yaml \
   --mode model-smoke \
   --dataset-root /home/hguimaraes/datasets/biodcase2026_tinyML
 ```
@@ -419,35 +417,16 @@ Remote training command:
 ```bash
 PERCH_TEACHER_SOFT_LABELS=/path/to/teacher_soft_labels.npz \
 python3 -m experiments.run_mel_mss_distill \
-  --config experiments/configs/mel_mss_sed_logit_distill.yaml \
   --mode train \
   --dataset-root /path/to/biodcase2026_tinyML
 ```
 
-This is the first run that tests whether temporal attention can close part of
-the gap between the 0.6248 logit-distilled Mel+MSS student and the 0.845 Perch
-teacher.
-
-The first SED run improved to `0.6339`, but validation accuracy was much noisier
-than the global-pooled logit-distilled student. The best epoch was `63`, while
-the run stopped at epoch `88`; after epoch `55`, validation accuracy had about
-`0.04` mean absolute epoch-to-epoch movement and several jumps near `0.09`.
-
-Stabilized follow-up config:
-
-```bash
-PERCH_TEACHER_SOFT_LABELS=/path/to/teacher_soft_labels.npz \
-python3 -m experiments.run_mel_mss_distill \
-  --config experiments/configs/mel_mss_sed_logit_distill_v2_stable.yaml \
-  --mode train \
-  --dataset-root /path/to/biodcase2026_tinyML
-```
-
-This variant keeps the same architecture and cache, but lowers LR, increases
+This stabilized config is the default for `experiments.run_mel_mss_distill`.
+It keeps the best SED architecture and cache, but lowers LR, increases
 dropout/weight decay, reduces the frame-max loss weight, removes frame-max KL,
 clips gradients more tightly, and enables `ReduceLROnPlateau` on validation loss.
-The goal is not just a higher best checkpoint, but a less jumpy validation curve
-so the selected checkpoint is more trustworthy.
+The previous SED config remains available as
+`experiments/configs/mel_mss_sed_logit_distill.yaml` for ablation history.
 
 ## Local HTML Report
 

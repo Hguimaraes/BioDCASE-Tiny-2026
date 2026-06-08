@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument(
     "--config",
-    default="experiments/configs/mel_mss_logit_distill.yaml",
+    default="experiments/configs/mel_mss_sed_logit_distill_v2_stable.yaml",
     help="Mel+MSS logit-distillation experiment YAML config.",
   )
   parser.add_argument(
