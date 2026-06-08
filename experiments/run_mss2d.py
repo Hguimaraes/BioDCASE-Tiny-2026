@@ -315,6 +315,12 @@ def write_run(config: dict[str, Any], mode: str, results: dict[str, Any], run_di
     "mss2d.best_checkpoint_path": (
       (results.get("best_checkpoints") or {}).get("best_accuracy") or {}
     ).get("path"),
+    "mss2d.early_stop_epoch": (
+      (results.get("best_checkpoints") or {}).get("early_stopping") or {}
+    ).get("stop_epoch"),
+    "mss2d.evaluated_checkpoint": (
+      (results.get("test_metrics") or {}).get("evaluated_checkpoint") or {}
+    ).get("name"),
   }
   runtime.append_summary(row, config)
   return run_dir

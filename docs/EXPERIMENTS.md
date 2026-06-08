@@ -131,6 +131,29 @@ results. The log includes the command, git commit, host/GPU info, dataset/cache
 settings, model config, epoch metrics, final test metrics, and traceback if the
 run fails.
 
+## MSS 2D V3 Regularized CNN
+
+This experiment reuses `cache_mss2d_v2` and changes only the student model and
+training recipe:
+
+```text
+MSS v2 features -> wider CNN -> BatchNorm -> Dropout -> AdamW -> early stopping
+```
+
+Remote training command:
+
+```bash
+python3 -m experiments.run_mss2d \
+  --config experiments/configs/mss2d_v3_regularized.yaml \
+  --mode train \
+  --dataset-root /path/to/biodcase2026_tinyML
+```
+
+The v3 model has about 250k trainable parameters. It evaluates the
+`best_accuracy` checkpoint rather than the final epoch checkpoint. The immediate
+goal is to beat the MSS2D-v2 best validation accuracy of `0.5046`; the next
+larger goal is the pretrained baseline accuracy of about `0.5628`.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

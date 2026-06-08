@@ -18,6 +18,8 @@ class MSS2DTinyCNN(ModelBase):
 
   def define_network_structure(self, n_filters=16, dropout=0.1):
     assert len(self.cfg["input_shape"]) == 3
+    n_filters = self.cfg.get("n_filters", n_filters)
+    dropout = self.cfg.get("dropout", dropout)
 
     self.features = nn.Sequential(
       nn.Conv2d(self.cfg["input_shape"][0], n_filters, kernel_size=5, stride=2, padding=2),
@@ -42,6 +44,51 @@ class MSS2DTinyCNN(ModelBase):
       nn.Linear(n_filters * 4, 32),
       nn.ReLU(),
       nn.Linear(32, self.cfg["num_classes"]),
+    )
+
+  def forward(self, x):
+    x = self.features(x)
+    return self.classifier(x)
+
+
+class MSS2DRegularizedCNN(ModelBase):
+  """Regularized MSS CNN for the v3 MSS-only experiment."""
+
+  def define_network_structure(self, n_filters=32, dropout=0.25):
+    assert len(self.cfg["input_shape"]) == 3
+    n_filters = self.cfg.get("n_filters", n_filters)
+    dropout = self.cfg.get("dropout", dropout)
+
+    self.features = nn.Sequential(
+      nn.Conv2d(self.cfg["input_shape"][0], n_filters, kernel_size=5, stride=2, padding=2, bias=False),
+      nn.BatchNorm2d(n_filters),
+      nn.ReLU(),
+      nn.MaxPool2d(kernel_size=2, stride=2),
+
+      nn.Conv2d(n_filters, n_filters * 2, kernel_size=3, padding=1, bias=False),
+      nn.BatchNorm2d(n_filters * 2),
+      nn.ReLU(),
+      nn.MaxPool2d(kernel_size=2, stride=2),
+
+      nn.Conv2d(n_filters * 2, n_filters * 4, kernel_size=3, stride=(2, 1), padding=1, bias=False),
+      nn.BatchNorm2d(n_filters * 4),
+      nn.ReLU(),
+      nn.Dropout2d(dropout * 0.5),
+
+      nn.Conv2d(n_filters * 4, n_filters * 4, kernel_size=3, stride=2, padding=1, bias=False),
+      nn.BatchNorm2d(n_filters * 4),
+      nn.ReLU(),
+      nn.Dropout2d(dropout),
+      nn.AdaptiveAvgPool2d((1, 1)),
+    )
+
+    self.classifier = nn.Sequential(
+      nn.Flatten(),
+      nn.Dropout(dropout),
+      nn.Linear(n_filters * 4, 64),
+      nn.ReLU(),
+      nn.Dropout(dropout),
+      nn.Linear(64, self.cfg["num_classes"]),
     )
 
   def forward(self, x):
