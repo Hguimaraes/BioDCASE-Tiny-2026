@@ -49,6 +49,8 @@ def display_columns(fields: list[str]) -> list[str]:
     "test_Baseline_tflite.size_bytes",
     "mss2d.feature_shape",
     "mss2d.num_params",
+    "mss2d.final_validation_accuracy",
+    "mss2d.test_accuracy",
     "mss2d.model_path",
   ]
   return [field for field in preferred if field in fields]

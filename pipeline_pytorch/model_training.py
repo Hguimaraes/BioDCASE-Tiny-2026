@@ -27,6 +27,9 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
   # info
   print("\nTrain model on device: {}...\n".format(model.get_device_full_str()))
 
+  # history
+  history = []
+
   # epochs
   for epoch in range(cfg['model_training']['num_epochs']):
 
@@ -69,8 +72,19 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
       # loss update
       epoch_validation_loss.append(loss)
 
+    # epoch metrics
+    train_loss = float(np.mean(epoch_train_loss))
+    validation_loss = float(np.mean(epoch_validation_loss))
+    validation_accuracy = float(np.mean(y_targets == y_predictions))
+    history.append({
+      'epoch': epoch + 1,
+      'train_loss': train_loss,
+      'validation_loss': validation_loss,
+      'validation_accuracy': validation_accuracy,
+    })
+
     # epoch info
-    print("Epoch {:03} - train loss: {:.4f}, val: [loss: {:.4f}, acc: {:.4f}]".format(epoch + 1, np.mean(epoch_train_loss), np.mean(epoch_validation_loss), np.mean(y_targets == y_predictions)))
+    print("Epoch {:03} - train loss: {:.4f}, val: [loss: {:.4f}, acc: {:.4f}]".format(epoch + 1, train_loss, validation_loss, validation_accuracy))
 
   # info
   print("Training of model finished!")
@@ -80,6 +94,8 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
 
   # save also label dict
   yaml.dump({'label_dict': label_dict}, open(Path(model.get_save_path()) / 'label_dict.yaml', 'w'))
+
+  return history
 
 
 def run_model_testing(cfg, model, dataloader_test, label_dict):
@@ -123,6 +139,12 @@ def run_model_testing(cfg, model, dataloader_test, label_dict):
   # info
   print("Testing of model finished!\n")
 
+  return {
+    'test_accuracy': float(acc),
+    'num_test_samples': int(len(y_targets)),
+    'confusion_matrix_path': str(plot_path_cm),
+  }
+
 
 def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation, datamodule_test):
   """
@@ -150,9 +172,13 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
   summary(model, input_size=input_shape, device=model.get_device_type_str())
 
   # run model training
-  run_model_training(cfg_framework, model, dataloader_train, dataloader_validation, label_dict=datamodule_train.get_label_dict())
+  training_history = run_model_training(cfg_framework, model, dataloader_train, dataloader_validation, label_dict=datamodule_train.get_label_dict())
 
   # run model testing
-  run_model_testing(cfg_framework, model, dataloader_test, label_dict=datamodule_test.get_label_dict())
+  test_metrics = run_model_testing(cfg_framework, model, dataloader_test, label_dict=datamodule_test.get_label_dict())
+
+  # attach metrics without changing the existing return contract
+  model.training_history = training_history
+  model.test_metrics = test_metrics
 
   return model

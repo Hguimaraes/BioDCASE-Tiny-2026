@@ -107,6 +107,17 @@ python3 -m experiments.run_mss2d --mode train
 Training uses `cache_mss2d_v1`, so it will not mix with the baseline mel cache.
 Model checkpoints and run records are written under ignored `output/`.
 
+Each training run writes a single feedback log:
+
+```text
+output/experiments/mss2d_input/<timestamp>_train/train.log
+```
+
+Send back that `train.log` plus the sibling `run.yaml` when reporting remote
+results. The log includes the command, git commit, host/GPU info, dataset/cache
+settings, model config, epoch metrics, final test metrics, and traceback if the
+run fails.
+
 ## Local HTML Report
 
 Generate a local report from the CSV summary:

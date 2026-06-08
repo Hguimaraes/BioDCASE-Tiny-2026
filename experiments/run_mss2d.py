@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import datetime as dt
 import importlib
 import os
+import platform
+import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +20,7 @@ os.environ.setdefault(
 
 import soundfile
 import torch
+import yaml
 
 from experiments import runtime
 from experiments.features.modulation_spectrum import ModulationSpectrum2DFeatureHandler
@@ -24,6 +30,82 @@ from pipeline_pytorch.model_training import pytorch_model_taining
 
 
 REQUIRED_MODULES = ["numpy", "soundfile", "sklearn", "torch", "torchsummary", "yaml"]
+
+
+class Tee:
+  """Write stream output to multiple destinations."""
+
+  def __init__(self, *streams):
+    self.streams = streams
+
+  def write(self, data):
+    for stream in self.streams:
+      stream.write(data)
+      stream.flush()
+
+  def flush(self):
+    for stream in self.streams:
+      stream.flush()
+
+
+@contextlib.contextmanager
+def tee_to_file(path: Path):
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with path.open("a", buffering=1) as f:
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = Tee(original_stdout, f)
+    sys.stderr = Tee(original_stderr, f)
+    try:
+      yield
+    finally:
+      sys.stdout = original_stdout
+      sys.stderr = original_stderr
+
+
+def training_log_header(config: dict[str, Any], args: argparse.Namespace, run_dir: Path):
+  training_cfg = config["training_config"]
+  header = {
+    "started_at": dt.datetime.now().isoformat(timespec="seconds"),
+    "command": " ".join(sys.argv),
+    "mode": args.mode,
+    "run_dir": str(run_dir),
+    "git": {
+      "branch": runtime.git_branch(),
+      "commit": runtime.git_commit(),
+      "dirty": runtime.git_dirty(),
+    },
+    "host": {
+      "platform": platform.platform(),
+      "python": platform.python_version(),
+      "torch": torch.__version__,
+      "cuda_available": torch.cuda.is_available(),
+      "cuda_device_count": torch.cuda.device_count(),
+      "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    },
+    "dataset": {
+      "root_path": training_cfg["datamodule"]["dataset"]["root_path"],
+      "cache_id": training_cfg["datamodule"]["caching"]["cache_id"],
+      "intermediate_id": training_cfg["datamodule"]["intermediate"]["intermediate_id"],
+    },
+    "feature_extraction": training_cfg["datamodule"]["feature_extraction"],
+    "model": training_cfg["pytorch_framework"]["model"],
+    "training": training_cfg["pytorch_framework"]["model_training"],
+    "dataloaders": {
+      "train": training_cfg["pytorch_framework"]["dataloader_train_kwargs"],
+      "validation_test": training_cfg["pytorch_framework"]["dataloader_validation_and_test_kwargs"],
+    },
+  }
+  print("=== MSS2D Training Run ===")
+  print(yaml.dump(header, default_flow_style=False, sort_keys=False))
+  print("=== Terminal Output ===")
+
+
+def training_log_footer(results: dict[str, Any], run_dir: Path):
+  print("=== Training Summary ===")
+  print(yaml.dump(results, default_flow_style=False, sort_keys=False))
+  print(f"Run YAML: {run_dir / 'run.yaml'}")
+  print(f"Feedback log: {run_dir / 'train.log'}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,6 +277,9 @@ def train(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     "model_path": str(model.get_model_file_path()),
     "tflite_path": str(model.get_tflite_model_file_path()),
     "num_params": int(sum(p.numel() for p in model.parameters() if p.requires_grad)),
+    "training_history": getattr(model, "training_history", []),
+    "final_epoch": getattr(model, "training_history", [])[-1] if getattr(model, "training_history", []) else None,
+    "test_metrics": getattr(model, "test_metrics", {}),
   }
 
 
@@ -214,6 +299,12 @@ def write_run(config: dict[str, Any], mode: str, results: dict[str, Any], run_di
     "mss2d.feature_shape": results.get("feature_shape") or results.get("input_shape"),
     "mss2d.num_params": results.get("num_params"),
     "mss2d.model_path": results.get("model_path"),
+    "mss2d.final_validation_accuracy": (
+      results.get("final_epoch") or {}
+    ).get("validation_accuracy"),
+    "mss2d.test_accuracy": (
+      results.get("test_metrics") or {}
+    ).get("test_accuracy"),
   }
   runtime.append_summary(row, config)
   return run_dir
@@ -234,8 +325,27 @@ def main() -> None:
     run_dir = write_run(config, args.mode, results)
   else:
     run_dir = runtime.make_run_dir(config, args.mode)
-    results = train(config, run_dir)
-    write_run(config, args.mode, results, run_dir=run_dir)
+    log_path = run_dir / "train.log"
+    with tee_to_file(log_path):
+      training_log_header(config, args, run_dir)
+      try:
+        results = train(config, run_dir)
+      except Exception as exc:
+        failure = {
+          "status": "failed",
+          "error": repr(exc),
+          "traceback": traceback.format_exc(),
+          "log_path": str(log_path),
+        }
+        write_run(config, args.mode, failure, run_dir=run_dir)
+        print("=== Training Failed ===")
+        traceback.print_exc()
+        print(f"Run YAML: {run_dir / 'run.yaml'}")
+        print(f"Feedback log: {log_path}")
+        raise
+      results["log_path"] = str(log_path)
+      write_run(config, args.mode, results, run_dir=run_dir)
+      training_log_footer(results, run_dir)
 
   print(f"Wrote run record: {run_dir / 'run.yaml'}")
 
