@@ -1,0 +1,29 @@
+run_id: 20260609_baseline
+name: baseline
+track: baseline
+notes: Official baseline artifacts (submission/your_submission_model/test_Baseline.*) evaluated locally on the validation set.
+created_utc: '2026-06-09T21:30:00+00:00'
+seed: null
+git:
+  sha: 33c0bfe
+  branch: main
+  dirty: false
+env:
+  host: local
+  cuda_available: false
+  gpu: null
+status: completed
+data:
+  n_val: 550
+  num_classes: 11
+model:
+  pth_bytes: 393109
+  tflite_bytes: 111408
+  params: 119563
+  macs: 23326923
+metrics:
+  val_acc: 0.5628
+  val_auc: 0.8931
+  tflite_int8_acc: 0.5701
+  tflite_int8_auc: 0.8938
+config: null
