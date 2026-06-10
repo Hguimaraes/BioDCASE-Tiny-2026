@@ -24,3 +24,6 @@ biodcase_tiny/feature_extraction/FilterbankConfig.py
 
 # for MacOS
 .DS_Store
+# perch raw embeddings (large, regenerable via experiments/perch/export_embeddings.py)
+experiments/perch/embeddings/**/Train.npz
+experiments/perch/embeddings/**/Validation.npz

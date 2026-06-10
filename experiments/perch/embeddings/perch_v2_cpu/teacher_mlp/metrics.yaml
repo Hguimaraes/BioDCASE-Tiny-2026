@@ -1,0 +1,18 @@
+head: mlp
+val_acc: 0.8925318761384335
+val_auc: 0.9924599031086292
+best_epoch: 5
+num_classes: 11
+temperature: 2.0
+label_names:
+- Background
+- Common Chaffinch
+- Common Chiffchaff
+- Eurasian Blackbird
+- Eurasian Blackcap
+- Eurasian Blue Tit
+- Great Spotted Woodpecker
+- Great Tit
+- Mallard
+- Song Thrush
+- Tawny Owl

@@ -1,0 +1,23 @@
+run_id: 20260610_teacher_perch_linear
+name: teacher-perch-linear
+track: C-teacher
+notes: Reference ceiling. Frozen Perch v2 (perch_v2_cpu, 1536-d embeddings) + linear head on our 11 classes. Not deployable; upper bound for distillation.
+created_utc: '2026-06-10T00:30:00+00:00'
+seed: 42
+git:
+  branch: feature/perch-distillation
+env:
+  host: local
+  cuda_available: false
+status: completed
+data:
+  n_train: 2200
+  n_validation: 549
+  num_classes: 11
+model:
+  model_name: PerchV2+linear
+  params: 16907
+metrics:
+  val_acc: 0.8925
+  val_auc: 0.9916
+config: null

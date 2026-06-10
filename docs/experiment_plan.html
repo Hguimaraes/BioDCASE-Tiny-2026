@@ -28,15 +28,17 @@ footer { margin-top:3rem; color:var(--muted); font-size:.8rem; border-top:1px so
 </head>
 <body>
 <main>
-<h1>BioDCASE-Tiny 2026 — Experiment Plan &amp; Results<span class="tag">2 runs</span></h1>
+<h1>BioDCASE-Tiny 2026 — Experiment Plan &amp; Results<span class="tag">4 runs</span></h1>
 
 <h2 id="results-section">Results</h2>
 <p class="muted">Click a column header to sort. Best row (by int8 AUC, falling back to val AUC) is highlighted.
 Records are read from <code>experiments/runs/&lt;run_id&gt;/run.yaml</code>; rebuild this page with
 <code>python experiments/build_dashboard.py</code>.</p>
 <div id="results-wrap">
-<table id="results"><thead><tr><th class="sortable" onclick="sortTable(this)">Run</th><th class="sortable" onclick="sortTable(this)">Track</th><th class="sortable" onclick="sortTable(this)">Branch</th><th class="sortable" onclick="sortTable(this)">Seed</th><th class="sortable" onclick="sortTable(this)">Val ACC</th><th class="sortable" onclick="sortTable(this)">Val AUC</th><th class="sortable" onclick="sortTable(this)">int8 ACC</th><th class="sortable" onclick="sortTable(this)">int8 AUC</th><th class="sortable" onclick="sortTable(this)">tflite [B]</th><th class="sortable" onclick="sortTable(this)">Params</th><th class="sortable" onclick="sortTable(this)">MACs</th><th class="sortable" onclick="sortTable(this)">Status</th><th class="sortable" onclick="sortTable(this)">Notes</th></tr></thead><tbody><tr class="best"><td>20260609_baseline</td><td>baseline</td><td>main</td><td>—</td><td>0.5628</td><td>0.8931</td><td>0.5701</td><td>0.8938</td><td>111,408</td><td>119,563</td><td>23,326,923</td><td>completed</td><td>Official baseline artifacts (submission/your_submission_model/test_Baseline.*) evaluated locally on the validation set.</td></tr>
-<tr><td>20260610_032542_smoke-track-a</td><td>A</td><td>feature/training-recipe</td><td>42</td><td>0.2040</td><td>0.6829</td><td>0.1949</td><td>0.6795</td><td>111,096</td><td>97,163</td><td>23,326,923</td><td>completed</td><td>smoke test only, 3 epochs on cpu</td></tr></tbody></table>
+<table id="results"><thead><tr><th class="sortable" onclick="sortTable(this)">Run</th><th class="sortable" onclick="sortTable(this)">Track</th><th class="sortable" onclick="sortTable(this)">Branch</th><th class="sortable" onclick="sortTable(this)">Seed</th><th class="sortable" onclick="sortTable(this)">Val ACC</th><th class="sortable" onclick="sortTable(this)">Val AUC</th><th class="sortable" onclick="sortTable(this)">int8 ACC</th><th class="sortable" onclick="sortTable(this)">int8 AUC</th><th class="sortable" onclick="sortTable(this)">tflite [B]</th><th class="sortable" onclick="sortTable(this)">Params</th><th class="sortable" onclick="sortTable(this)">MACs</th><th class="sortable" onclick="sortTable(this)">Status</th><th class="sortable" onclick="sortTable(this)">Notes</th></tr></thead><tbody><tr><td>20260609_baseline</td><td>baseline</td><td>main</td><td>—</td><td>0.5628</td><td>0.8931</td><td>0.5701</td><td>0.8938</td><td>111,408</td><td>119,563</td><td>23,326,923</td><td>completed</td><td>Official baseline artifacts (submission/your_submission_model/test_Baseline.*) evaluated locally on the validation set.</td></tr>
+<tr><td>20260610_032542_smoke-track-a</td><td>A</td><td>feature/training-recipe</td><td>42</td><td>0.2040</td><td>0.6829</td><td>0.1949</td><td>0.6795</td><td>111,096</td><td>97,163</td><td>23,326,923</td><td>completed</td><td>smoke test only, 3 epochs on cpu</td></tr>
+<tr><td>20260610_teacher_perch_linear</td><td>C-teacher</td><td>feature/perch-distillation</td><td>42</td><td>0.8925</td><td>0.9916</td><td>—</td><td>—</td><td>—</td><td>16,907</td><td>—</td><td>completed</td><td>Reference ceiling. Frozen Perch v2 (perch_v2_cpu, 1536-d embeddings) + linear head on our 11 classes. Not deployable; upper bound for distillation.</td></tr>
+<tr class="best"><td>20260610_teacher_perch_mlp</td><td>C-teacher</td><td>feature/perch-distillation</td><td>42</td><td>0.8925</td><td>0.9925</td><td>—</td><td>—</td><td>—</td><td>792,075</td><td>—</td><td>completed</td><td>Reference ceiling and distillation teacher. Frozen Perch v2 (perch_v2_cpu, 1536-d embeddings) + MLP head (512 hidden) on our 11 classes. Not deployable; soft logits used to distill the student.</td></tr></tbody></table>
 </div>
 
 <h2 id="biodcase-tiny-2026-experiment-plan">BioDCASE-Tiny 2026 — Experiment Plan</h2>
@@ -82,12 +84,22 @@ Records are read from <code>experiments/runs/&lt;run_id&gt;/run.yaml</code>; reb
 <li>Width/depth sweep targeting 3 operating points: ~30 KB, ~60 KB, ~110 KB (= baseline size) tflite.</li>
 <li>Verify every op is TFLite-Micro/esp-nn friendly (int8 DW-conv is well supported and fast on ESP32-S3).</li>
 </ul>
-<h4 id="track-c-distillation-from-bioacoustic-foundation-teachers">Track C — Distillation from bioacoustic foundation teachers</h4>
-<p>Branch: <code>feature/teacher-distillation</code> (fresh implementation)</p>
+<h4 id="track-c1-perch-v2-logit-distillation-primary-deployable">Track C1 — Perch v2 logit distillation (primary, deployable)</h4>
+<p>Branch: <code>feature/perch-distillation</code></p>
 <ul>
-<li>Teacher: Perch (and/or BioME / BirdNET) fine-tuned or linear-probed on the 11 classes; export soft labels once, reuse across runs.</li>
-<li>Student: best arch from Track B. Loss: α·KL(T) + (1−α)·CE, sweep α ∈ {0.3, 0.5, 0.7}, T ∈ {2, 3, 4}; optionally feature-space distillation (project student penultimate → teacher embedding, cosine loss) as a second signal.</li>
-<li>Combine with Track A augmentation (teacher labels computed on clean audio, student sees augmented input — "consistency distillation").</li>
+<li><strong>Teacher = frozen Perch v2 encoder + an 11-class head trained on our labels.</strong> We build the head on our data rather than read Perch's native species logits: it avoids eBird code-mapping mistakes and handles the <strong>Background</strong> class natively (Perch has no urban-noise class). Coverage check confirmed all 10 competition species exist in Perch v2's <code>inat2024</code> taxonomy, but we still train our own head.</li>
+<li>Pipeline (in <code>experiments/perch/</code>):</li>
+<li><code>export_embeddings.py</code> (runs in <code>.venv-perch</code>): frozen Perch v2 (<code>perch_v2_cpu</code>, 32 kHz / 5 s window, 1536-d embeddings) over every clip, saved keyed by wav stem for cross-env alignment. One-time cost.</li>
+<li><code>train_teacher_head.py</code>: linear/MLP head on cached embeddings; reports the teacher's own val ACC/AUC = <strong>reference ceiling</strong>; exports raw soft logits per clip.</li>
+<li>Distill into the tiny CNN student: <code>α·KL(T) + (1−α)·CE</code>, sweep α ∈ {0.3, 0.5, 0.7}, T ∈ {2, 3, 4}. Student stays a plain, fully-deployable CNN; teacher logits are aligned by stem.</li>
+<li>Compose with Track A augmentation (teacher logits from clean audio, student sees augmented input — consistency distillation).</li>
+</ul>
+<h4 id="track-c2-msab-film-student-biome-inspired-research-first">Track C2 — MSAB-FiLM student (BioME-inspired, research-first)</h4>
+<p>Branch: <code>feature/msab-film</code></p>
+<ul>
+<li>Inject Modulation Spectrogram Average Bands (MSAB) into the student CNN via FiLM conditioning (<code>x' = γ⊙x + β</code>, with <code>(γ,β)</code> from the MSAB context vector), porting the BioME idea from Transformer layers to conv blocks.</li>
+<li>MSAB is a single global vector per 3 s clip, so the on-device overhead is bounded and computed once — but it is still an extra DSP kernel (FFT-along-time + band averaging) on the ESP32. Inference-path FiLM is the chosen design; the embedded C kernel only gets written if the host-side gain clears <strong>+3 pts ACC</strong> over C1.</li>
+<li>Distill from the same Perch teacher, so C2 isolates the FiLM/MSAB contribution on top of C1.</li>
 </ul>
 <h4 id="track-d-feature-extraction-budget">Track D — Feature extraction budget</h4>
 <p>Branch: <code>feature/feature-tuning</code></p>
@@ -134,7 +146,8 @@ Records are read from <code>experiments/runs/&lt;run_id&gt;/run.yaml</code>; reb
 </ol>
 <h3 id="7-discussion-log">7. Discussion log</h3>
 <ul>
-<li><strong>2026-06-09</strong> — Plan agreed (accuracy-first, Perch teacher, research-first custom features). Baseline reproduced locally: float 0.5628 ACC / 0.8931 AUC; int8 0.5701 ACC / 0.8938 AUC. Track A (<code>feature/training-recipe</code>) started: feature-space dynamic augmentation (time/freq masking, Gaussian noise, mixup), label smoothing, cosine LR with warmup, best-checkpoint selection on val macro-AUC, full run logging.</li>
+<li><strong>2026-06-09</strong> — Plan agreed (accuracy-first, Perch teacher, research-first custom features). Baseline reproduced locally: float 0.5628 ACC / 0.8931 AUC; int8 0.5701 ACC / 0.8938 AUC. Track A (<code>feature/training-recipe</code>) implemented and smoke-tested: feature-space dynamic augmentation (time/freq masking, Gaussian noise, mixup), label smoothing, cosine LR with warmup, best-checkpoint selection on val macro-AUC, full run logging.</li>
+<li><strong>2026-06-09 (cont.)</strong> — Track C design finalized after reading the BioME paper. Teacher = frozen Perch v2 (<code>perch_v2_cpu</code>, 1536-d embeddings, runs locally on CPU) + 11-class head trained on our labels. Confirmed all 10 species are in Perch v2's taxonomy; Background needs our head. Split into C1 (deployable Perch logit distillation) and C2 (MSAB-FiLM research, inference-path FiLM, +3 pt promotion bar). Built <code>experiments/perch/export_embeddings.py</code> and <code>train_teacher_head.py</code>; embedding export validated end-to-end.</li>
 </ul>
 
 <footer>Generated by <code>experiments/build_dashboard.py</code> from <code>docs/EXPERIMENT_PLAN.md</code> and <code>experiments/runs/</code>.</footer>

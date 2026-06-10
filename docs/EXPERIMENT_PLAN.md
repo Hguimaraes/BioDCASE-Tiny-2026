@@ -90,16 +90,39 @@ Branch: `feature/slim-cnn`
 - Verify every op is TFLite-Micro/esp-nn friendly (int8 DW-conv is well
   supported and fast on ESP32-S3).
 
-### Track C — Distillation from bioacoustic foundation teachers
-Branch: `feature/teacher-distillation` (fresh implementation)
-- Teacher: Perch (and/or BioME / BirdNET) fine-tuned or linear-probed on
-  the 11 classes; export soft labels once, reuse across runs.
-- Student: best arch from Track B. Loss: α·KL(T) + (1−α)·CE, sweep
-  α ∈ {0.3, 0.5, 0.7}, T ∈ {2, 3, 4}; optionally feature-space
-  distillation (project student penultimate → teacher embedding, cosine
-  loss) as a second signal.
-- Combine with Track A augmentation (teacher labels computed on clean
-  audio, student sees augmented input — "consistency distillation").
+### Track C1 — Perch v2 logit distillation (primary, deployable)
+Branch: `feature/perch-distillation`
+- **Teacher = frozen Perch v2 encoder + an 11-class head trained on our
+  labels.** We build the head on our data rather than read Perch's native
+  species logits: it avoids eBird code-mapping mistakes and handles the
+  **Background** class natively (Perch has no urban-noise class). Coverage
+  check confirmed all 10 competition species exist in Perch v2's
+  `inat2024` taxonomy, but we still train our own head.
+- Pipeline (in `experiments/perch/`):
+  1. `export_embeddings.py` (runs in `.venv-perch`): frozen Perch v2
+     (`perch_v2_cpu`, 32 kHz / 5 s window, 1536-d embeddings) over every
+     clip, saved keyed by wav stem for cross-env alignment. One-time cost.
+  2. `train_teacher_head.py`: linear/MLP head on cached embeddings;
+     reports the teacher's own val ACC/AUC = **reference ceiling**; exports
+     raw soft logits per clip.
+  3. Distill into the tiny CNN student: `α·KL(T) + (1−α)·CE`, sweep
+     α ∈ {0.3, 0.5, 0.7}, T ∈ {2, 3, 4}. Student stays a plain,
+     fully-deployable CNN; teacher logits are aligned by stem.
+- Compose with Track A augmentation (teacher logits from clean audio,
+  student sees augmented input — consistency distillation).
+
+### Track C2 — MSAB-FiLM student (BioME-inspired, research-first)
+Branch: `feature/msab-film`
+- Inject Modulation Spectrogram Average Bands (MSAB) into the student CNN
+  via FiLM conditioning (`x' = γ⊙x + β`, with `(γ,β)` from the MSAB context
+  vector), porting the BioME idea from Transformer layers to conv blocks.
+- MSAB is a single global vector per 3 s clip, so the on-device overhead
+  is bounded and computed once — but it is still an extra DSP kernel
+  (FFT-along-time + band averaging) on the ESP32. Inference-path FiLM is
+  the chosen design; the embedded C kernel only gets written if the
+  host-side gain clears **+3 pts ACC** over C1.
+- Distill from the same Perch teacher, so C2 isolates the FiLM/MSAB
+  contribution on top of C1.
 
 ### Track D — Feature extraction budget
 Branch: `feature/feature-tuning`
@@ -178,7 +201,15 @@ moves by `git pull`, results come back as committed run records.
 - **2026-06-09** — Plan agreed (accuracy-first, Perch teacher,
   research-first custom features). Baseline reproduced locally:
   float 0.5628 ACC / 0.8931 AUC; int8 0.5701 ACC / 0.8938 AUC.
-  Track A (`feature/training-recipe`) started: feature-space dynamic
-  augmentation (time/freq masking, Gaussian noise, mixup), label
-  smoothing, cosine LR with warmup, best-checkpoint selection on val
-  macro-AUC, full run logging.
+  Track A (`feature/training-recipe`) implemented and smoke-tested:
+  feature-space dynamic augmentation (time/freq masking, Gaussian noise,
+  mixup), label smoothing, cosine LR with warmup, best-checkpoint
+  selection on val macro-AUC, full run logging.
+- **2026-06-09 (cont.)** — Track C design finalized after reading the
+  BioME paper. Teacher = frozen Perch v2 (`perch_v2_cpu`, 1536-d
+  embeddings, runs locally on CPU) + 11-class head trained on our labels.
+  Confirmed all 10 species are in Perch v2's taxonomy; Background needs
+  our head. Split into C1 (deployable Perch logit distillation) and C2
+  (MSAB-FiLM research, inference-path FiLM, +3 pt promotion bar). Built
+  `experiments/perch/export_embeddings.py` and `train_teacher_head.py`;
+  embedding export validated end-to-end.
