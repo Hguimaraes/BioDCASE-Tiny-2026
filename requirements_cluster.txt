@@ -11,7 +11,8 @@
 #   - ai-edge-quantizer-nightly-> int8 quantization (post-training, no GPU);
 #                                 run locally (BIODCASE_SKIP_QUANTIZATION=1).
 #   - PyQt6                    -> interactive matplotlib backend only; the
-#                                 cluster saves PNGs via Agg (MPLBACKEND=Agg).
+#                                 cluster saves PNGs via Agg (MPLBACKEND=Agg,
+#                                 set in cluster/run_ablations.sh).
 #   - docker                   -> ESP32 deployment toolchain, skipped here.
 #
 # The cluster run therefore does: train (distillation) -> evaluate the .pth

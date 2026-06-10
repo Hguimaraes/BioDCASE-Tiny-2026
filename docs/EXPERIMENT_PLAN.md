@@ -182,9 +182,10 @@ moves by `git pull`, results come back as committed run records.
 
 1. Develop on a `feature/*` branch locally; smoke-test on CPU
    (`skip_deployment_flag: True`, a few epochs).
-2. On the cluster: `git pull`, set `BIODCASE_DATA_ROOT` to the dataset
-   path, `sbatch cluster/train.sbatch` (template in repo; adjust
-   account/partition).
+2. On the cluster: `git pull`, grab an interactive allocation
+   (`salloc --gres=gpu:1 ...`), set/stage `BIODCASE_DATA_ROOT`, then
+   `bash cluster/run_ablations.sh` to sweep `experiments/configs/*.yaml`
+   across seeds in one session (no sbatch).
 3. Every run writes a self-contained record to
    `experiments/runs/<run_id>/` — full resolved config, git SHA + branch,
    seed, host/GPU, per-epoch `metrics.csv`, final metrics, artifact

@@ -139,7 +139,7 @@ Records are read from <code>experiments/runs/&lt;run_id&gt;/run.yaml</code>; reb
 <p>The cluster is SLURM-based; the dataset is already staged there. Code moves by <code>git pull</code>, results come back as committed run records.</p>
 <ol>
 <li>Develop on a <code>feature/*</code> branch locally; smoke-test on CPU (<code>skip_deployment_flag: True</code>, a few epochs).</li>
-<li>On the cluster: <code>git pull</code>, set <code>BIODCASE_DATA_ROOT</code> to the dataset path, <code>sbatch cluster/train.sbatch</code> (template in repo; adjust account/partition).</li>
+<li>On the cluster: <code>git pull</code>, grab an interactive allocation (<code>salloc --gres=gpu:1 ...</code>), set/stage <code>BIODCASE_DATA_ROOT</code>, then <code>bash cluster/run_ablations.sh</code> to sweep <code>experiments/configs/*.yaml</code> across seeds in one session (no sbatch).</li>
 <li>Every run writes a self-contained record to <code>experiments/runs/&lt;run_id&gt;/</code> — full resolved config, git SHA + branch, seed, host/GPU, per-epoch <code>metrics.csv</code>, final metrics, artifact sizes. These folders are small and tracked in git: commit them on the cluster, pull them back locally.</li>
 <li>Locally: <code>python experiments/build_dashboard.py</code> regenerates <code>docs/experiment_plan.html</code> (this plan + sortable results table).</li>
 <li>Environment overrides (so the same config works everywhere): <code>BIODCASE_DATA_ROOT</code> (dataset path), <code>BIODCASE_SKIP_DEPLOYMENT=1</code> (no docker/ESP-IDF on cluster nodes).</li>
