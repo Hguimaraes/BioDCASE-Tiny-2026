@@ -226,3 +226,13 @@ moves by `git pull`, results come back as committed run records.
   (b) distillation needs α/T tuning; (c) the student is too small to absorb
   Perch through mel features (→ motivates Track B slimmer-but-better arch
   and/or feature distillation).
+- **2026-06-10 (cont.)** — Ablation 2×2 done (3 seeds each). Verdict:
+  **distillation works, augmentation hurts.** Best = pure Perch distillation,
+  no augmentation: 0.5974 ACC / 0.9099 AUC (vs baseline 0.5628 / 0.8931;
+  +3.5 ACC / +1.7 AUC). Adding Track A augmentation to distillation drops it
+  to 0.5647 / 0.8961 — confirms hypothesis (a): teacher soft targets already
+  regularize, heavy aug over-regularizes the tiny CNN. New working baseline
+  = `abl_distill_no_aug`. Next: (1) α/T sweep on the no-aug base (cheap);
+  (2) Track B slimmer-but-stronger student (the teacher gap is still huge,
+  0.60 vs 0.89, so architecture is now the main lever). Augmentation, if
+  revisited, must be much gentler.
