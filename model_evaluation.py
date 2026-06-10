@@ -151,7 +151,7 @@ def model_evaluation(cfg, datamodule_test, model_path):
   y_pred = run_model_main(cfg, datamodule_test, model_path)
 
   # skip -> model could not be executed
-  if y_pred is None: return
+  if y_pred is None: return None
 
   # softmax
   y_prob = softmax(y_pred, axis=1)
@@ -160,11 +160,16 @@ def model_evaluation(cfg, datamodule_test, model_path):
   auc = roc_auc_score(y_true, y_prob,
             multi_class="ovr",   # important for multiclass
             average="macro")
-  
+
+  # accuracy
+  acc = top1_accuracy_sklearn(y_pred, y_true)
+
   # prints
-  print('Top-1 accuracy: {:.4f}'.format(top1_accuracy_sklearn(y_pred, y_true)))
+  print('Top-1 accuracy: {:.4f}'.format(acc))
   print('Area under ROC curve: {:.4f}'.format(auc))
   print('Completed evaluations for model saved in ', model_path)
+
+  return {'acc': float(acc), 'auc': float(auc)}
    
 
 if __name__ == '__main__':

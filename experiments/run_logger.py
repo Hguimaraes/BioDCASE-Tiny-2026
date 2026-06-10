@@ -160,4 +160,20 @@ class RunLogger:
     write run.yaml
     """
 
-    with open(self.run_dir / 'run.yaml', 'w') as f: yaml.safe_dump(self.record, f, sort_keys=False, default_flow_style=False)
+    with open(self.run_dir / 'run.yaml', 'w') as f: yaml.safe_dump(_to_plain(self.record), f, sort_keys=False, default_flow_style=False)
+
+
+def _to_plain(obj):
+  """
+  reduce arbitrary objects to yaml-safe builtins (e.g. torch.TorchVersion,
+  numpy scalars, pathlib paths)
+  """
+
+  if isinstance(obj, dict): return {_to_plain(k): _to_plain(v) for k, v in obj.items()}
+  if isinstance(obj, (list, tuple)): return [_to_plain(v) for v in obj]
+  if isinstance(obj, bool) or obj is None: return obj
+  if isinstance(obj, (int, float)) and type(obj) in (int, float): return obj
+  if isinstance(obj, np.integer): return int(obj)
+  if isinstance(obj, np.floating): return float(obj)
+  if isinstance(obj, str) and type(obj) is str: return obj
+  return str(obj)

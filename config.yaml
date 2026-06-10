@@ -82,6 +82,27 @@ datamodule:
 # pytorch framework
 pytorch_framework:
 
+  # experiment run logging (see experiments/run_logger.py)
+  experiment:
+    name: 'track-a-recipe'
+    track: 'A'
+    runs_dir: './experiments/runs'
+    seed: 42
+    notes: 'Track A training recipe: dynamic augmentation, mixup, label smoothing, cosine lr, best checkpoint on val auc'
+
+  # training recipe (track A) - all entries optional, defaults in model_training.py
+  training_recipe:
+    augmentation:
+      enabled: True
+      time_mask: {'num': 2, 'max_width': 24, 'p': 0.5}
+      freq_mask: {'num': 2, 'max_width': 8, 'p': 0.5}
+      gaussian_noise: {'std': 0.03, 'p': 0.3}
+      mask_fill_value: 0.0
+    mixup: {'alpha': 0.2, 'p': 0.5}
+    scheduler: {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05}
+    best_checkpoint_metric: 'val_auc'
+    early_stopping_patience: 30
+
   dataloader_train_kwargs:
     batch_size: 32
     shuffle: true
@@ -98,12 +119,12 @@ pytorch_framework:
       device:
         use_cpu: False
         device_name: 'cuda:0'
-      criterion: {'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {}}
+      criterion: {'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.1}}
       optimizer: {'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}}
       verbose: False
 
   model_training:
-    num_epochs: 100
+    num_epochs: 120
 
 # tensorflow framework
 tensorflow_framework:
