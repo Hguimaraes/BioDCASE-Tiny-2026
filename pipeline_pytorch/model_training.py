@@ -195,6 +195,11 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
   # run logging
   if run_logger is not None: run_logger.log_metrics(best_epoch=best_epoch, **{'best_{}'.format(best_metric_name): float(best_metric)})
 
+  # remove any stale .tflite from a previous run so its existence is an
+  # authoritative signal of whether THIS run exported one (on a node without
+  # litert-torch the export is skipped and no .tflite should be present)
+  model.get_tflite_model_file_path().unlink(missing_ok=True)
+
   # save model
   model.save(save_also_as_tflite=True)
 

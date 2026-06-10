@@ -52,13 +52,16 @@ if __name__ == '__main__':
   # tflite model
   tflite_path = model.get_tflite_model_file_path()
 
-  # check existance
+  # training-only node: litert-torch (-> ai-edge stack) may be absent, so no
+  # .tflite was exported. The .pth model + its val metrics are already logged;
+  # finalize cleanly and do tflite export + quantization locally instead.
   if not tflite_path.is_file():
-    print("***Your .tflite model could not be found at: {}\nExit!".format(tflite_path))
-    run_logger.finalize(status='no_tflite')
+    print("\nNo .tflite exported (litert-torch unavailable on this node).")
+    print("Training + .pth eval complete; run tflite export/quantization locally.")
+    run_logger.finalize(status='completed')
     sys.exit()
 
-  # always evaluate the float tflite model
+  # evaluate the float tflite model
   print("Float tflite evaluation: ")
   metrics = model_evaluation(cfg, datamodule_test, tflite_path)
   if metrics is not None: run_logger.log_metrics(tflite_float_acc=metrics['acc'], tflite_float_auc=metrics['auc'])

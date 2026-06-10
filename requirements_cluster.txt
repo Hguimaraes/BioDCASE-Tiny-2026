@@ -2,24 +2,25 @@
 # requirements for training-only runs on a GPU cluster (e.g. SLURM)
 #
 # This is requirements_pytorch.txt minus the packages a headless training
-# node does not need and that may be hard to install there:
-#   - PyQt6                    -> only an interactive matplotlib backend;
-#                                 the cluster saves PNGs with the Agg backend
-#                                 (set MPLBACKEND=Agg, see cluster/train.sbatch)
-#   - ai-edge-quantizer-nightly-> only for int8 quantization (post-training,
-#                                 no GPU); run that step locally instead
-#                                 (BIODCASE_SKIP_QUANTIZATION=1 on the cluster)
-#   - docker                   -> only for the ESP32 deployment toolchain,
-#                                 which is skipped on the cluster
+# node does not need and that pull in the ai-edge / litert stack (which does
+# not install on the cluster):
+#   - litert-torch             -> tflite export; depends on the ai-edge stack.
+#                                 Without it no .tflite is produced; the .pth
+#                                 model + its val ACC/AUC are still logged.
+#                                 Export + int8 quantization are done locally.
+#   - ai-edge-quantizer-nightly-> int8 quantization (post-training, no GPU);
+#                                 run locally (BIODCASE_SKIP_QUANTIZATION=1).
+#   - PyQt6                    -> interactive matplotlib backend only; the
+#                                 cluster saves PNGs via Agg (MPLBACKEND=Agg).
+#   - docker                   -> ESP32 deployment toolchain, skipped here.
 #
-# litert-torch is kept so the float .tflite is still exported and evaluated.
-# If litert-torch is also unavailable, training + .pth eval still run and the
-# pipeline logs a warning and skips the tflite step.
+# The cluster run therefore does: train (distillation) -> evaluate the .pth
+# model -> log val metrics. Pull the .pth back and run tflite export +
+# quantization locally on the candidates worth deploying.
 
 flatbuffers
 jinja2
 librosa
-litert-torch
 matplotlib
 numpy
 numba

@@ -11,7 +11,9 @@ from scipy.special import softmax
 from sklearn.metrics import accuracy_score, roc_auc_score
 
 from datamodule import DatamoduleTinyMl
-from ai_edge_litert.interpreter import Interpreter
+# NOTE: ai_edge_litert (the tflite Interpreter) is imported lazily inside
+# run_model_tflite so this module imports on a training-only node that does
+# not have the ai-edge / litert stack installed.
 
 
 def top1_accuracy_sklearn(y_pred, y_true):
@@ -94,7 +96,8 @@ def run_model_tflite(cfg, datamodule_test, model_path):
   # input data
   input_data = datamodule_test.features
 
-  # tflite interpreter
+  # tflite interpreter (lazy import: not available on training-only nodes)
+  from ai_edge_litert.interpreter import Interpreter
   interpreter = Interpreter(model_path=str(model_path))
   interpreter.allocate_tensors()
 
