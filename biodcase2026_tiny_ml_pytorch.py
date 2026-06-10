@@ -9,11 +9,14 @@ from pathlib import Path
 from datamodule import DatamoduleTinyMl
 from pipeline_pytorch.paths import MODELS_DIR
 from pipeline_pytorch.model_training import pytorch_model_taining
-from embedded_code_generation import run_compile_embedded_src_code, run_create_target_embedded_src_code, run_deploy_embedded_compiled_code
 from model_evaluation import model_evaluation
-from model_quantization import model_quantization
-from biodcase_tiny.embedded.esp_monitor_parser import finalize_monitor_report
 from experiments.run_logger import RunLogger
+
+# NOTE: int8 quantization (model_quantization -> ai-edge-quantizer) and the
+# embedded deployment toolchain (embedded_code_generation / esp_monitor_parser
+# -> docker, ESP-IDF) are imported lazily below, so a training-only
+# environment (e.g. a SLURM cluster node without those packages) can run the
+# full train + float-tflite eval without them installed.
 
 if __name__ == '__main__':
   """
@@ -55,24 +58,32 @@ if __name__ == '__main__':
     run_logger.finalize(status='no_tflite')
     sys.exit()
 
-  # quantize
-  if cfg['generate_embedded_code']['quantize']:
-    print("Model evaluation before quantization: ")
-    metrics = model_evaluation(cfg, datamodule_test, tflite_path)
-    if metrics is not None: run_logger.log_metrics(tflite_float_acc=metrics['acc'], tflite_float_auc=metrics['auc'])
+  # always evaluate the float tflite model
+  print("Float tflite evaluation: ")
+  metrics = model_evaluation(cfg, datamodule_test, tflite_path)
+  if metrics is not None: run_logger.log_metrics(tflite_float_acc=metrics['acc'], tflite_float_auc=metrics['auc'])
+  run_logger.log_artifact_size('tflite_float', tflite_path)
 
+  # int8 quantization (optional): needs ai-edge-quantizer, which a
+  # training-only cluster node may not have. Skip via BIODCASE_SKIP_QUANTIZATION
+  # or gracefully if the package is missing; quantize such candidates locally.
+  quantize = cfg['generate_embedded_code']['quantize'] and not os.environ.get('BIODCASE_SKIP_QUANTIZATION')
+  if quantize:
+    try:
+      from model_quantization import model_quantization
+    except ImportError as e:
+      print("***ai-edge-quantizer not available ({}); skipping int8 quantization (quantize this candidate locally).".format(e))
+      quantize = False
+
+  if quantize:
     # TODO fix overwritten file (add quantization path)
     print("Model quantization (model will be overwritten!) ")
     model_quantization(datamodule_test, tflite_path, tflite_path)
 
     print("Model evaluation after quantization: ")
-
-  # evaluation .tflite model
-  metrics = model_evaluation(cfg, datamodule_test, tflite_path)
-  if metrics is not None: run_logger.log_metrics(tflite_int8_acc=metrics['acc'], tflite_int8_auc=metrics['auc'])
-
-  # tflite artifact size
-  run_logger.log_artifact_size('tflite', tflite_path)
+    metrics = model_evaluation(cfg, datamodule_test, tflite_path)
+    if metrics is not None: run_logger.log_metrics(tflite_int8_acc=metrics['acc'], tflite_int8_auc=metrics['auc'])
+    run_logger.log_artifact_size('tflite', tflite_path)
 
   # finalize run record
   run_logger.finalize(status='completed')
@@ -81,6 +92,11 @@ if __name__ == '__main__':
   if cfg['skip_deployment_flag']:
     print("\nSkip deployment! For deployment change 'skip_deployment_flag' to 'False' in 'config.yaml'")
     sys.exit()
+
+  # embedded deployment toolchain (docker / ESP-IDF) - imported lazily so a
+  # training-only environment does not require these packages
+  from embedded_code_generation import run_compile_embedded_src_code, run_create_target_embedded_src_code, run_deploy_embedded_compiled_code
+  from biodcase_tiny.embedded.esp_monitor_parser import finalize_monitor_report
 
   # run generate embedded src code
   run_create_target_embedded_src_code(cfg, tflite_path)
