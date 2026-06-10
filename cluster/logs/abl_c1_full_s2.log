@@ -1,0 +1,177 @@
+Hello Tiny ML 2026 - pytorch framework, version: 1.0
+RunLogger - logging run to: experiments/runs/20260610_121841_abl-c1-full-s2
+DatamoduleTinyMl load cache with id: [cache0] and filter: [Train] ...
+DatamoduleTinyMl load cache with id: [cache0] and filter: [Validation] ...
+DatamoduleTinyMl load cache with id: [cache0] and filter: [Validation] ...
+
+--
+DatamoduleTinyMl info: 
+label dict:  {'Background': 0, 'Common Chaffinch': 1, 'Common Chiffchaff': 2, 'Eurasian Blackbird': 3, 'Eurasian Blackcap': 4, 'Eurasian Blue Tit': 5, 'Great Spotted Woodpecker': 6, 'Great Tit': 7, 'Mallard': 8, 'Song Thrush': 9, 'Tawny Owl': 10}
+feature size at load:  (1, 40, 133)
+--
+
+Distillation enabled - teacher logits from: ./experiments/perch/embeddings/perch_v2_cpu/teacher_mlp (2200 train samples aligned)
+----------------------------------------------------------------
+        Layer (type)               Output Shape         Param #
+================================================================
+            Conv2d-1          [-1, 32, 38, 131]             320
+              ReLU-2          [-1, 32, 38, 131]               0
+         MaxPool2d-3           [-1, 32, 19, 65]               0
+            Conv2d-4           [-1, 64, 17, 63]          18,496
+              ReLU-5           [-1, 64, 17, 63]               0
+         MaxPool2d-6            [-1, 64, 4, 15]               0
+            Conv2d-7           [-1, 128, 2, 13]          73,856
+              ReLU-8           [-1, 128, 2, 13]               0
+ AdaptiveAvgPool2d-9            [-1, 128, 1, 1]               0
+          Flatten-10                  [-1, 128]               0
+          Dropout-11                  [-1, 128]               0
+           Linear-12                   [-1, 32]           4,128
+             ReLU-13                   [-1, 32]               0
+           Linear-14                   [-1, 11]             363
+================================================================
+Total params: 97,163
+Trainable params: 97,163
+Non-trainable params: 0
+----------------------------------------------------------------
+Input size (MB): 0.02
+Forward/backward pass size (MB): 3.86
+Params size (MB): 0.37
+Estimated Total Size (MB): 4.25
+----------------------------------------------------------------
+
+Train model on device: cuda:0 | epochs: 120 | mixup(alpha=0.2, p=0.5) | scheduler: cosine | distill: alpha=0.5 T=3.0 | best on: val_auc
+
+Epoch 001 - lr: 2.00e-04, train loss: 4.1003, val: [loss: 2.3891, acc: 0.0893, auc: 0.6665]
+Epoch 002 - lr: 4.00e-04, train loss: 3.9295, val: [loss: 2.3206, acc: 0.2058, auc: 0.6796]
+Epoch 003 - lr: 6.00e-04, train loss: 3.7258, val: [loss: 2.2534, acc: 0.2131, auc: 0.7149]
+Epoch 004 - lr: 8.00e-04, train loss: 3.6454, val: [loss: 2.2195, acc: 0.2495, auc: 0.7284]
+Epoch 005 - lr: 1.00e-03, train loss: 3.5608, val: [loss: 2.1251, acc: 0.2969, auc: 0.7501]
+Epoch 006 - lr: 1.00e-03, train loss: 3.5141, val: [loss: 2.0767, acc: 0.3133, auc: 0.7635]
+Epoch 007 - lr: 1.00e-03, train loss: 3.4111, val: [loss: 2.0175, acc: 0.3461, auc: 0.7744]
+Epoch 008 - lr: 9.99e-04, train loss: 3.4414, val: [loss: 1.9878, acc: 0.3625, auc: 0.7794]
+Epoch 009 - lr: 9.98e-04, train loss: 3.2404, val: [loss: 2.0183, acc: 0.3424, auc: 0.7857]
+Epoch 010 - lr: 9.97e-04, train loss: 3.2372, val: [loss: 2.0315, acc: 0.3497, auc: 0.7859]
+Epoch 011 - lr: 9.96e-04, train loss: 3.3126, val: [loss: 1.9831, acc: 0.3570, auc: 0.7907]
+Epoch 012 - lr: 9.94e-04, train loss: 3.2062, val: [loss: 1.9849, acc: 0.3515, auc: 0.7937]
+Epoch 013 - lr: 9.91e-04, train loss: 3.2194, val: [loss: 2.0123, acc: 0.3406, auc: 0.7999]
+Epoch 014 - lr: 9.89e-04, train loss: 3.2336, val: [loss: 2.0127, acc: 0.3607, auc: 0.8037]
+Epoch 015 - lr: 9.86e-04, train loss: 3.1913, val: [loss: 1.9409, acc: 0.3734, auc: 0.8098]
+Epoch 016 - lr: 9.82e-04, train loss: 3.1430, val: [loss: 1.9933, acc: 0.3698, auc: 0.8109]
+Epoch 017 - lr: 9.79e-04, train loss: 3.1195, val: [loss: 1.9153, acc: 0.3916, auc: 0.8180]
+Epoch 018 - lr: 9.75e-04, train loss: 3.0582, val: [loss: 1.9058, acc: 0.4117, auc: 0.8199]
+Epoch 019 - lr: 9.70e-04, train loss: 3.0420, val: [loss: 1.8855, acc: 0.4062, auc: 0.8245]
+Epoch 020 - lr: 9.66e-04, train loss: 3.0180, val: [loss: 1.9092, acc: 0.4153, auc: 0.8248]
+Epoch 021 - lr: 9.61e-04, train loss: 2.9718, val: [loss: 1.8933, acc: 0.4062, auc: 0.8303]
+Epoch 022 - lr: 9.55e-04, train loss: 2.9680, val: [loss: 1.8541, acc: 0.4463, auc: 0.8331]
+Epoch 023 - lr: 9.50e-04, train loss: 2.8913, val: [loss: 1.8582, acc: 0.4353, auc: 0.8363]
+Epoch 024 - lr: 9.44e-04, train loss: 2.9087, val: [loss: 1.8315, acc: 0.4426, auc: 0.8388]
+Epoch 025 - lr: 9.37e-04, train loss: 2.8521, val: [loss: 1.9265, acc: 0.4554, auc: 0.8345]
+Epoch 026 - lr: 9.31e-04, train loss: 2.9102, val: [loss: 1.8247, acc: 0.4481, auc: 0.8414]
+Epoch 027 - lr: 9.24e-04, train loss: 2.8694, val: [loss: 1.8667, acc: 0.4590, auc: 0.8419]
+Epoch 028 - lr: 9.17e-04, train loss: 2.8899, val: [loss: 1.8403, acc: 0.4499, auc: 0.8425]
+Epoch 029 - lr: 9.09e-04, train loss: 2.8207, val: [loss: 1.9153, acc: 0.4627, auc: 0.8438]
+Epoch 030 - lr: 9.02e-04, train loss: 2.8092, val: [loss: 1.8877, acc: 0.4517, auc: 0.8435]
+Epoch 031 - lr: 8.93e-04, train loss: 2.8336, val: [loss: 1.8564, acc: 0.4208, auc: 0.8463]
+Epoch 032 - lr: 8.85e-04, train loss: 2.8148, val: [loss: 1.8909, acc: 0.4590, auc: 0.8467]
+Epoch 033 - lr: 8.77e-04, train loss: 2.7311, val: [loss: 1.8535, acc: 0.4772, auc: 0.8527]
+Epoch 034 - lr: 8.68e-04, train loss: 2.7392, val: [loss: 1.8302, acc: 0.4645, auc: 0.8525]
+Epoch 035 - lr: 8.59e-04, train loss: 2.7164, val: [loss: 1.9044, acc: 0.4590, auc: 0.8495]
+Epoch 036 - lr: 8.49e-04, train loss: 2.7264, val: [loss: 1.8436, acc: 0.4718, auc: 0.8525]
+Epoch 037 - lr: 8.40e-04, train loss: 2.6838, val: [loss: 1.8655, acc: 0.4863, auc: 0.8529]
+Epoch 038 - lr: 8.30e-04, train loss: 2.6692, val: [loss: 1.7925, acc: 0.4918, auc: 0.8582]
+Epoch 039 - lr: 8.20e-04, train loss: 2.6890, val: [loss: 1.7584, acc: 0.5027, auc: 0.8596]
+Epoch 040 - lr: 8.09e-04, train loss: 2.6433, val: [loss: 1.7832, acc: 0.4918, auc: 0.8615]
+Epoch 041 - lr: 7.99e-04, train loss: 2.6418, val: [loss: 1.8618, acc: 0.5009, auc: 0.8580]
+Epoch 042 - lr: 7.88e-04, train loss: 2.6539, val: [loss: 1.8179, acc: 0.4791, auc: 0.8603]
+Epoch 043 - lr: 7.77e-04, train loss: 2.6232, val: [loss: 1.7769, acc: 0.5173, auc: 0.8633]
+Epoch 044 - lr: 7.66e-04, train loss: 2.6476, val: [loss: 1.8199, acc: 0.4918, auc: 0.8629]
+Epoch 045 - lr: 7.55e-04, train loss: 2.6253, val: [loss: 1.8078, acc: 0.4973, auc: 0.8643]
+Epoch 046 - lr: 7.44e-04, train loss: 2.5971, val: [loss: 1.8216, acc: 0.4863, auc: 0.8612]
+Epoch 047 - lr: 7.32e-04, train loss: 2.5758, val: [loss: 1.7591, acc: 0.4991, auc: 0.8680]
+Epoch 048 - lr: 7.20e-04, train loss: 2.5833, val: [loss: 1.7803, acc: 0.5064, auc: 0.8655]
+Epoch 049 - lr: 7.08e-04, train loss: 2.5380, val: [loss: 1.7916, acc: 0.5046, auc: 0.8661]
+Epoch 050 - lr: 6.96e-04, train loss: 2.5721, val: [loss: 1.7214, acc: 0.5137, auc: 0.8701]
+Epoch 051 - lr: 6.84e-04, train loss: 2.5125, val: [loss: 1.7939, acc: 0.5319, auc: 0.8662]
+Epoch 052 - lr: 6.72e-04, train loss: 2.5085, val: [loss: 1.7833, acc: 0.5137, auc: 0.8678]
+Epoch 053 - lr: 6.59e-04, train loss: 2.5150, val: [loss: 1.7110, acc: 0.5355, auc: 0.8721]
+Epoch 054 - lr: 6.47e-04, train loss: 2.5128, val: [loss: 1.7303, acc: 0.5264, auc: 0.8721]
+Epoch 055 - lr: 6.34e-04, train loss: 2.5311, val: [loss: 1.7586, acc: 0.5264, auc: 0.8747]
+Epoch 056 - lr: 6.22e-04, train loss: 2.4583, val: [loss: 1.7741, acc: 0.5191, auc: 0.8703]
+Epoch 057 - lr: 6.09e-04, train loss: 2.4715, val: [loss: 1.7587, acc: 0.5337, auc: 0.8720]
+Epoch 058 - lr: 5.96e-04, train loss: 2.4942, val: [loss: 1.7169, acc: 0.5373, auc: 0.8752]
+Epoch 059 - lr: 5.83e-04, train loss: 2.5365, val: [loss: 1.8029, acc: 0.5209, auc: 0.8717]
+Epoch 060 - lr: 5.70e-04, train loss: 2.4561, val: [loss: 1.6925, acc: 0.5282, auc: 0.8774]
+Epoch 061 - lr: 5.57e-04, train loss: 2.4560, val: [loss: 1.7066, acc: 0.5246, auc: 0.8768]
+Epoch 062 - lr: 5.44e-04, train loss: 2.4534, val: [loss: 1.7287, acc: 0.5446, auc: 0.8768]
+Epoch 063 - lr: 5.31e-04, train loss: 2.4441, val: [loss: 1.7413, acc: 0.5355, auc: 0.8783]
+Epoch 064 - lr: 5.19e-04, train loss: 2.4159, val: [loss: 1.7186, acc: 0.5501, auc: 0.8784]
+Epoch 065 - lr: 5.06e-04, train loss: 2.4003, val: [loss: 1.6868, acc: 0.5556, auc: 0.8804]
+Epoch 066 - lr: 4.93e-04, train loss: 2.4273, val: [loss: 1.6690, acc: 0.5574, auc: 0.8810]
+Epoch 067 - lr: 4.80e-04, train loss: 2.4332, val: [loss: 1.7030, acc: 0.5319, auc: 0.8801]
+Epoch 068 - lr: 4.67e-04, train loss: 2.4212, val: [loss: 1.7000, acc: 0.5464, auc: 0.8808]
+Epoch 069 - lr: 4.54e-04, train loss: 2.4056, val: [loss: 1.7008, acc: 0.5483, auc: 0.8802]
+Epoch 070 - lr: 4.41e-04, train loss: 2.4061, val: [loss: 1.6831, acc: 0.5537, auc: 0.8818]
+Epoch 071 - lr: 4.28e-04, train loss: 2.3671, val: [loss: 1.7245, acc: 0.5537, auc: 0.8820]
+Epoch 072 - lr: 4.16e-04, train loss: 2.3907, val: [loss: 1.7318, acc: 0.5556, auc: 0.8820]
+Epoch 073 - lr: 4.03e-04, train loss: 2.3992, val: [loss: 1.7250, acc: 0.5610, auc: 0.8834]
+Epoch 074 - lr: 3.91e-04, train loss: 2.4090, val: [loss: 1.6635, acc: 0.5628, auc: 0.8851]
+Epoch 075 - lr: 3.78e-04, train loss: 2.3582, val: [loss: 1.6729, acc: 0.5610, auc: 0.8855]
+Epoch 076 - lr: 3.66e-04, train loss: 2.3864, val: [loss: 1.6905, acc: 0.5501, auc: 0.8848]
+Epoch 077 - lr: 3.54e-04, train loss: 2.3722, val: [loss: 1.6906, acc: 0.5446, auc: 0.8858]
+Epoch 078 - lr: 3.42e-04, train loss: 2.3384, val: [loss: 1.6607, acc: 0.5556, auc: 0.8870]
+Epoch 079 - lr: 3.30e-04, train loss: 2.3463, val: [loss: 1.6828, acc: 0.5556, auc: 0.8869]
+Epoch 080 - lr: 3.18e-04, train loss: 2.3356, val: [loss: 1.6747, acc: 0.5719, auc: 0.8874]
+Epoch 081 - lr: 3.06e-04, train loss: 2.3630, val: [loss: 1.7035, acc: 0.5610, auc: 0.8866]
+Epoch 082 - lr: 2.95e-04, train loss: 2.3908, val: [loss: 1.6710, acc: 0.5683, auc: 0.8875]
+Epoch 083 - lr: 2.84e-04, train loss: 2.3433, val: [loss: 1.6937, acc: 0.5665, auc: 0.8865]
+Epoch 084 - lr: 2.73e-04, train loss: 2.3408, val: [loss: 1.6779, acc: 0.5628, auc: 0.8875]
+Epoch 085 - lr: 2.62e-04, train loss: 2.3327, val: [loss: 1.6487, acc: 0.5701, auc: 0.8884]
+Epoch 086 - lr: 2.51e-04, train loss: 2.3310, val: [loss: 1.6643, acc: 0.5756, auc: 0.8887]
+Epoch 087 - lr: 2.41e-04, train loss: 2.3544, val: [loss: 1.6690, acc: 0.5556, auc: 0.8893]
+Epoch 088 - lr: 2.30e-04, train loss: 2.3576, val: [loss: 1.6641, acc: 0.5501, auc: 0.8887]
+Epoch 089 - lr: 2.20e-04, train loss: 2.3180, val: [loss: 1.6651, acc: 0.5647, auc: 0.8905]
+Epoch 090 - lr: 2.10e-04, train loss: 2.3433, val: [loss: 1.6823, acc: 0.5683, auc: 0.8877]
+Epoch 091 - lr: 2.01e-04, train loss: 2.3114, val: [loss: 1.6605, acc: 0.5701, auc: 0.8912]
+Epoch 092 - lr: 1.91e-04, train loss: 2.3628, val: [loss: 1.6511, acc: 0.5647, auc: 0.8905]
+Epoch 093 - lr: 1.82e-04, train loss: 2.3083, val: [loss: 1.6533, acc: 0.5556, auc: 0.8905]
+Epoch 094 - lr: 1.73e-04, train loss: 2.3221, val: [loss: 1.6717, acc: 0.5537, auc: 0.8906]
+Epoch 095 - lr: 1.65e-04, train loss: 2.2900, val: [loss: 1.6617, acc: 0.5719, auc: 0.8918]
+Epoch 096 - lr: 1.57e-04, train loss: 2.2799, val: [loss: 1.6574, acc: 0.5647, auc: 0.8913]
+Epoch 097 - lr: 1.48e-04, train loss: 2.3012, val: [loss: 1.6498, acc: 0.5665, auc: 0.8904]
+Epoch 098 - lr: 1.41e-04, train loss: 2.2988, val: [loss: 1.6564, acc: 0.5628, auc: 0.8912]
+Epoch 099 - lr: 1.33e-04, train loss: 2.3054, val: [loss: 1.6763, acc: 0.5701, auc: 0.8905]
+Epoch 100 - lr: 1.26e-04, train loss: 2.2917, val: [loss: 1.6599, acc: 0.5665, auc: 0.8916]
+Epoch 101 - lr: 1.19e-04, train loss: 2.2838, val: [loss: 1.6550, acc: 0.5683, auc: 0.8918]
+Epoch 102 - lr: 1.13e-04, train loss: 2.2542, val: [loss: 1.6561, acc: 0.5701, auc: 0.8921]
+Epoch 103 - lr: 1.06e-04, train loss: 2.2889, val: [loss: 1.6530, acc: 0.5719, auc: 0.8916]
+Epoch 104 - lr: 1.00e-04, train loss: 2.2883, val: [loss: 1.6595, acc: 0.5738, auc: 0.8912]
+Epoch 105 - lr: 9.47e-05, train loss: 2.2653, val: [loss: 1.6556, acc: 0.5738, auc: 0.8919]
+Epoch 106 - lr: 8.93e-05, train loss: 2.2670, val: [loss: 1.6472, acc: 0.5592, auc: 0.8924]
+Epoch 107 - lr: 8.43e-05, train loss: 2.2491, val: [loss: 1.6575, acc: 0.5665, auc: 0.8916]
+Epoch 108 - lr: 7.96e-05, train loss: 2.2900, val: [loss: 1.6573, acc: 0.5665, auc: 0.8913]
+Epoch 109 - lr: 7.53e-05, train loss: 2.2695, val: [loss: 1.6547, acc: 0.5701, auc: 0.8915]
+Epoch 110 - lr: 7.13e-05, train loss: 2.2677, val: [loss: 1.6592, acc: 0.5719, auc: 0.8925]
+Epoch 111 - lr: 6.76e-05, train loss: 2.2717, val: [loss: 1.6556, acc: 0.5701, auc: 0.8926]
+Epoch 112 - lr: 6.43e-05, train loss: 2.2819, val: [loss: 1.6496, acc: 0.5610, auc: 0.8921]
+Epoch 113 - lr: 6.13e-05, train loss: 2.2616, val: [loss: 1.6513, acc: 0.5665, auc: 0.8927]
+Epoch 114 - lr: 5.87e-05, train loss: 2.2802, val: [loss: 1.6531, acc: 0.5665, auc: 0.8921]
+Epoch 115 - lr: 5.64e-05, train loss: 2.2527, val: [loss: 1.6535, acc: 0.5683, auc: 0.8923]
+Epoch 116 - lr: 5.44e-05, train loss: 2.2859, val: [loss: 1.6463, acc: 0.5683, auc: 0.8927]
+Epoch 117 - lr: 5.28e-05, train loss: 2.2629, val: [loss: 1.6495, acc: 0.5665, auc: 0.8925]
+Epoch 118 - lr: 5.16e-05, train loss: 2.2865, val: [loss: 1.6492, acc: 0.5665, auc: 0.8926]
+Epoch 119 - lr: 5.07e-05, train loss: 2.2666, val: [loss: 1.6527, acc: 0.5665, auc: 0.8928]
+Epoch 120 - lr: 5.02e-05, train loss: 2.2679, val: [loss: 1.6501, acc: 0.5647, auc: 0.8929]
+Training finished - restored best checkpoint from epoch 120 (val_auc: 0.8929)
+
+***@model_base.save_model_to_tflite: litert_torch is not installed, therefore, model could not be saved in .tflite format!
+
+Test model on device: cuda:0...
+
+Test accuracy: 0.5647, macro auc: 0.8929
+Confusion matrix is saved in [/home/heitor/research/BioDCASE-Tiny-2026/output/04_reports/pytorch/cm_Baseline.png]
+Testing of model finished!
+
+
+No .tflite exported (litert-torch unavailable on this node).
+Training + .pth eval complete; run tflite export/quantization locally.
+RunLogger - run [20260610_121841_abl-c1-full-s2] finalized with status: completed
