@@ -20,10 +20,13 @@ export MPLBACKEND=Agg                 # headless plots (no PyQt6)
 source .venv/bin/activate
 mkdir -p cluster/logs
 
-# --- sweep definition (edit these two lists) --------------------------------
-# all configs in experiments/configs/, or list them explicitly
-CONFIGS=(experiments/configs/*.yaml)
-SEEDS=(1 2 3)                         # set to (42) for a quick single-seed pass
+# --- sweep definition -------------------------------------------------------
+# arg 1: glob of config files (default: experiments/configs/*.yaml)
+# arg 2: space-separated seeds   (default: "1 2 3"; use "42" for a quick pass)
+#   bash cluster/run_ablations.sh 'experiments/configs/distill_sweep/*.yaml'
+#   bash cluster/run_ablations.sh 'experiments/configs/abl_*.yaml' '42'
+CONFIGS=(${1:-experiments/configs/*.yaml})
+read -r -a SEEDS <<< "${2:-1 2 3}"
 
 # ----------------------------------------------------------------------------
 echo "git: $(git rev-parse --short HEAD) | data: $BIODCASE_DATA_ROOT"
