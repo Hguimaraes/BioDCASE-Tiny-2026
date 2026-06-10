@@ -29,6 +29,12 @@ if __name__ == '__main__':
   # environment overrides (cluster / local portability, see cluster/train.sbatch)
   if os.environ.get('BIODCASE_DATA_ROOT'): cfg['datamodule']['dataset']['root_path'] = os.environ['BIODCASE_DATA_ROOT']
   if os.environ.get('BIODCASE_SKIP_DEPLOYMENT'): cfg['skip_deployment_flag'] = True
+  # seed / run-name overrides for multi-seed sweeps without duplicate configs
+  if os.environ.get('BIODCASE_SEED'):
+    seed = int(os.environ['BIODCASE_SEED'])
+    cfg['pytorch_framework']['experiment']['seed'] = seed
+    cfg['pytorch_framework']['experiment']['name'] = '{}-s{}'.format(cfg['pytorch_framework']['experiment'].get('name', 'run'), seed)
+  if os.environ.get('BIODCASE_RUN_NAME'): cfg['pytorch_framework']['experiment']['name'] = os.environ['BIODCASE_RUN_NAME']
 
   # info
   print("Hello Tiny ML 2026 - pytorch framework, version: {}".format(cfg['version']))

@@ -213,3 +213,15 @@ moves by `git pull`, results come back as committed run records.
   (MSAB-FiLM research, inference-path FiLM, +3 pt promotion bar). Built
   `experiments/perch/export_embeddings.py` and `train_teacher_head.py`;
   embedding export validated end-to-end.
+- **2026-06-10** — First full C1 run on the cluster (H100 MIG, 120 ep,
+  seed 42): val 0.5537 ACC / 0.8841 AUC — **at baseline, marginally below**
+  (baseline pth 0.5628 / 0.8931). Distillation produced no lift in this
+  configuration. Problem: baseline→C1 changed many knobs at once (recipe +
+  distillation), so effects are confounded. Launching the recipe×distill
+  2×2 ablation (`experiments/make_ablation_configs.py` → `abl_recipe_only`,
+  `abl_distill_no_aug`, `abl_c1_full`) to attribute the effect; added
+  `BIODCASE_SEED`/`BIODCASE_RUN_NAME` env overrides for seed sweeps.
+  Hypotheses: (a) Track A augmentation over-regularizes the 97k-param CNN;
+  (b) distillation needs α/T tuning; (c) the student is too small to absorb
+  Perch through mel features (→ motivates Track B slimmer-but-better arch
+  and/or feature distillation).
