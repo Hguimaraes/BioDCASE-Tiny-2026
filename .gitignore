@@ -27,3 +27,6 @@ biodcase_tiny/feature_extraction/FilterbankConfig.py
 # perch raw embeddings (large, regenerable via experiments/perch/export_embeddings.py)
 experiments/perch/embeddings/**/Train.npz
 experiments/perch/embeddings/**/Validation.npz
+
+# smoke-test run records (transient)
+experiments/runs/*smoke*

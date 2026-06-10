@@ -84,13 +84,13 @@ pytorch_framework:
 
   # experiment run logging (see experiments/run_logger.py)
   experiment:
-    name: 'track-a-recipe'
-    track: 'A'
+    name: 'track-c1-perch-distill'
+    track: 'C1'
     runs_dir: './experiments/runs'
     seed: 42
-    notes: 'Track A training recipe: dynamic augmentation, mixup, label smoothing, cosine lr, best checkpoint on val auc'
+    notes: 'Track C1: Perch v2 logit distillation (KL+CE) into baseline CNN, on top of Track A recipe'
 
-  # training recipe (track A) - all entries optional, defaults in model_training.py
+  # training recipe - all entries optional, defaults in model_training.py
   training_recipe:
     augmentation:
       enabled: True
@@ -102,6 +102,14 @@ pytorch_framework:
     scheduler: {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05}
     best_checkpoint_metric: 'val_auc'
     early_stopping_patience: 30
+    # logit distillation from the Perch v2 teacher (track C1)
+    distillation:
+      enabled: True
+      teacher_dir: './experiments/perch/embeddings/perch_v2_cpu/teacher_mlp'
+      alpha: 0.5
+      temperature: 3.0
+      label_smoothing: 0.1
+      train_split: 'Train'
 
   dataloader_train_kwargs:
     batch_size: 32

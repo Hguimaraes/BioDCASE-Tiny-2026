@@ -21,6 +21,7 @@ from plots import plot_confusion_matrix
 from pipeline_pytorch.paths import MODELS_DIR, CM_FIG_PATH
 from pipeline_pytorch.pytorch_datamodule import DataloaderPytorch
 from pipeline_pytorch.augmentation import FeatureAugmentDataset, mixup_batch
+from pipeline_pytorch.distillation import TeacherLogitDataset, load_teacher_logits, mixup_with_teacher, distillation_loss
 from pipeline_pytorch.model_tiny_ml import Baseline
 
 
@@ -31,6 +32,9 @@ RECIPE_DEFAULTS = {
   'scheduler': {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05},
   'best_checkpoint_metric': 'val_auc',
   'early_stopping_patience': 0,
+  # logit distillation from the Perch teacher (track C1); disabled by default
+  'distillation': {'enabled': False, 'teacher_dir': '', 'alpha': 0.5, 'temperature': 3.0,
+                   'label_smoothing': 0.1, 'train_split': 'Train'},
 }
 
 
@@ -100,14 +104,19 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
   cfg_mixup = recipe.get('mixup', {}) or {}
   mixup_alpha, mixup_p = cfg_mixup.get('alpha', 0.0), cfg_mixup.get('p', 0.0)
 
+  # distillation config
+  cfg_distill = recipe.get('distillation', {}) or {}
+  distill_on = cfg_distill.get('enabled', False)
+
   # best checkpoint tracking
   best_metric_name = recipe.get('best_checkpoint_metric', 'val_auc')
   best_metric, best_epoch, best_state = -np.inf, -1, None
   patience = recipe.get('early_stopping_patience', 0)
 
   # info
-  print("\nTrain model on device: {} | epochs: {} | mixup(alpha={}, p={}) | scheduler: {} | best on: {}\n".format(
-    model.get_device_full_str(), num_epochs, mixup_alpha, mixup_p, recipe.get('scheduler', {}).get('name'), best_metric_name))
+  print("\nTrain model on device: {} | epochs: {} | mixup(alpha={}, p={}) | scheduler: {} | distill: {} | best on: {}\n".format(
+    model.get_device_full_str(), num_epochs, mixup_alpha, mixup_p, recipe.get('scheduler', {}).get('name'),
+    'alpha={} T={}'.format(cfg_distill.get('alpha'), cfg_distill.get('temperature')) if distill_on else 'off', best_metric_name))
 
   # epochs
   for epoch in range(num_epochs):
@@ -121,11 +130,29 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     # train loader
     for data in dataloader_train:
 
-      # batch-level mixup -> soft targets (also without mixing, targets become one-hot)
-      x, y_soft = mixup_batch(data[0], data[1], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
+      if distill_on:
+        # data: (x, y, sid, teacher_logits) -> joint mixup, then KL+CE
+        x, y_soft, t_logits = mixup_with_teacher(data[0], data[1], data[3], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
+        x = x.to(device=model.device, dtype=torch.float32)
+        y_soft = y_soft.to(device=model.device)
+        t_logits = t_logits.to(device=model.device)
 
-      # training step
-      loss = model.train_step((x, y_soft))
+        model.optimizer.zero_grad()
+        student_logits = model.forward(x)
+        loss_t, _ = distillation_loss(student_logits, t_logits, y_soft,
+                                      alpha=cfg_distill.get('alpha', 0.5),
+                                      temperature=cfg_distill.get('temperature', 3.0),
+                                      label_smoothing=cfg_distill.get('label_smoothing', 0.0))
+        loss_t.backward()
+        model.optimizer.step()
+        loss = float(loss_t.detach())
+
+      else:
+        # batch-level mixup -> soft targets (also without mixing, targets become one-hot)
+        x, y_soft = mixup_batch(data[0], data[1], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
+
+        # training step
+        loss = model.train_step((x, y_soft))
 
       # loss update
       epoch_train_loss.append(loss)
@@ -237,6 +264,14 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
 
   # train dataset with dynamic augmentation (train split only)
   dataset_train = FeatureAugmentDataset(DataloaderPytorch(datamodule_train), cfg=recipe.get('augmentation', {}))
+
+  # attach teacher logits for distillation (track C1)
+  cfg_distill = recipe.get('distillation', {}) or {}
+  if cfg_distill.get('enabled', False):
+    teacher_dir = cfg_distill['teacher_dir']
+    stem_to_logits = load_teacher_logits(teacher_dir, cfg_distill.get('train_split', 'Train'))
+    dataset_train = TeacherLogitDataset(dataset_train, datamodule_train, stem_to_logits, len(datamodule_train.get_label_dict()))
+    print('Distillation enabled - teacher logits from: {} ({} train samples aligned)'.format(teacher_dir, len(dataset_train)))
 
   # dataloader
   dataloader_train = torch.utils.data.DataLoader(dataset_train, **cfg_framework['dataloader_train_kwargs'])

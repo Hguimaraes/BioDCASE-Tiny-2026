@@ -28,7 +28,7 @@ footer { margin-top:3rem; color:var(--muted); font-size:.8rem; border-top:1px so
 </head>
 <body>
 <main>
-<h1>BioDCASE-Tiny 2026 — Experiment Plan &amp; Results<span class="tag">4 runs</span></h1>
+<h1>BioDCASE-Tiny 2026 — Experiment Plan &amp; Results<span class="tag">3 runs</span></h1>
 
 <h2 id="results-section">Results</h2>
 <p class="muted">Click a column header to sort. Best row (by int8 AUC, falling back to val AUC) is highlighted.
@@ -36,7 +36,6 @@ Records are read from <code>experiments/runs/&lt;run_id&gt;/run.yaml</code>; reb
 <code>python experiments/build_dashboard.py</code>.</p>
 <div id="results-wrap">
 <table id="results"><thead><tr><th class="sortable" onclick="sortTable(this)">Run</th><th class="sortable" onclick="sortTable(this)">Track</th><th class="sortable" onclick="sortTable(this)">Branch</th><th class="sortable" onclick="sortTable(this)">Seed</th><th class="sortable" onclick="sortTable(this)">Val ACC</th><th class="sortable" onclick="sortTable(this)">Val AUC</th><th class="sortable" onclick="sortTable(this)">int8 ACC</th><th class="sortable" onclick="sortTable(this)">int8 AUC</th><th class="sortable" onclick="sortTable(this)">tflite [B]</th><th class="sortable" onclick="sortTable(this)">Params</th><th class="sortable" onclick="sortTable(this)">MACs</th><th class="sortable" onclick="sortTable(this)">Status</th><th class="sortable" onclick="sortTable(this)">Notes</th></tr></thead><tbody><tr><td>20260609_baseline</td><td>baseline</td><td>main</td><td>—</td><td>0.5628</td><td>0.8931</td><td>0.5701</td><td>0.8938</td><td>111,408</td><td>119,563</td><td>23,326,923</td><td>completed</td><td>Official baseline artifacts (submission/your_submission_model/test_Baseline.*) evaluated locally on the validation set.</td></tr>
-<tr><td>20260610_032542_smoke-track-a</td><td>A</td><td>feature/training-recipe</td><td>42</td><td>0.2040</td><td>0.6829</td><td>0.1949</td><td>0.6795</td><td>111,096</td><td>97,163</td><td>23,326,923</td><td>completed</td><td>smoke test only, 3 epochs on cpu</td></tr>
 <tr><td>20260610_teacher_perch_linear</td><td>C-teacher</td><td>feature/perch-distillation</td><td>42</td><td>0.8925</td><td>0.9916</td><td>—</td><td>—</td><td>—</td><td>16,907</td><td>—</td><td>completed</td><td>Reference ceiling. Frozen Perch v2 (perch_v2_cpu, 1536-d embeddings) + linear head on our 11 classes. Not deployable; upper bound for distillation.</td></tr>
 <tr class="best"><td>20260610_teacher_perch_mlp</td><td>C-teacher</td><td>feature/perch-distillation</td><td>42</td><td>0.8925</td><td>0.9925</td><td>—</td><td>—</td><td>—</td><td>792,075</td><td>—</td><td>completed</td><td>Reference ceiling and distillation teacher. Frozen Perch v2 (perch_v2_cpu, 1536-d embeddings) + MLP head (512 hidden) on our 11 classes. Not deployable; soft logits used to distill the student.</td></tr></tbody></table>
 </div>
