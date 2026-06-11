@@ -55,6 +55,83 @@ class Baseline(ModelBase):
     return x
 
 
+class DepthwiseSeparableBlock(nn.Module):
+  """
+  MobileNet-style depthwise-separable block: 3x3 depthwise conv (optionally
+  strided) + 1x1 pointwise conv, each followed by BatchNorm + ReLU. All ops
+  are int8 TFLite / esp-nn friendly (BN folds into the preceding conv).
+  """
+
+  def __init__(self, in_ch, out_ch, stride=1):
+    super().__init__()
+    self.block = nn.Sequential(
+      # depthwise
+      nn.Conv2d(in_ch, in_ch, kernel_size=3, stride=stride, padding=1, groups=in_ch, bias=False),
+      nn.BatchNorm2d(in_ch),
+      nn.ReLU(),
+      # pointwise
+      nn.Conv2d(in_ch, out_ch, kernel_size=1, bias=False),
+      nn.BatchNorm2d(out_ch),
+      nn.ReLU(),
+    )
+
+  def forward(self, x):
+    return self.block(x)
+
+
+class SlimCNN(ModelBase):
+  """
+  Track B student: a depthwise-separable CNN on the baseline mel input
+  (1 x mel x time). Replaces the baseline's dense 3x3 convs with cheaper
+  DS blocks, freeing parameter budget for more depth/width. Architecture
+  hyperparameters are read from config kwargs (defaults below) so width and
+  depth can be swept.
+  """
+
+  def define_network_structure(self):
+
+    assert len(self.cfg['input_shape']) == 3
+
+    # arch hyperparameters (overridable via model kwargs in config)
+    stem_ch = self.cfg.get('stem_ch', 24)
+    block_widths = self.cfg.get('block_widths', [48, 64, 96, 128])
+    block_strides = self.cfg.get('block_strides', [2, 2, 2, 1])
+    head_dim = self.cfg.get('head_dim', 64)
+    dropout = self.cfg.get('dropout', 0.1)
+    assert len(block_widths) == len(block_strides), "block_widths and block_strides must match"
+
+    # stem: standard 3x3 conv (cheap at 1 input channel)
+    layers = [
+      nn.Conv2d(self.cfg['input_shape'][0], stem_ch, kernel_size=3, stride=1, padding=1, bias=False),
+      nn.BatchNorm2d(stem_ch),
+      nn.ReLU(),
+    ]
+
+    # depthwise-separable blocks
+    in_ch = stem_ch
+    for out_ch, stride in zip(block_widths, block_strides):
+      layers.append(DepthwiseSeparableBlock(in_ch, out_ch, stride=stride))
+      in_ch = out_ch
+
+    # global average pooling
+    layers.append(nn.AdaptiveAvgPool2d((1, 1)))
+    self.features = nn.Sequential(*layers)
+
+    # classifier head
+    self.classifier = nn.Sequential(
+      nn.Flatten(),
+      nn.Dropout(dropout),
+      nn.Linear(in_ch, head_dim),
+      nn.ReLU(),
+      nn.Linear(head_dim, self.cfg['num_classes']),
+    )
+
+  def forward(self, x):
+    x = self.features(x)
+    x = self.classifier(x)
+    return x
+
+
 
 if __name__ == '__main__':
   """
