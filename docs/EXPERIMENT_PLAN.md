@@ -245,3 +245,19 @@ moves by `git pull`, results come back as committed run records.
   (+ Perch distillation, no aug). Smoke-tested end-to-end incl. int8.
   Cluster run pending; question is whether the DS arch distills better than
   the dense baseline at equal/lower budget.
+- **2026-06-10 (cont.)** — Track B result (seed 42): DS arch is an
+  efficiency win, not an accuracy one. slim_default 0.5719/0.8991 @76KB
+  (−2.5 ACC for −32% size), slim_wide 0.5865/0.9025 @109KB (≈ dense within
+  noise), slim_deep 0.5483 (too much mel downsampling). Student plateaus
+  ~0.57–0.60 *regardless of architecture* while teacher is 0.89 → the limit
+  is the input representation, not the model. Motivates C2.
+- **2026-06-10 (cont.)** — Track C2 built (`feature/slim-cnn`): ported MSAB
+  (modulation-spectrum average bands) + FiLM from BioME/speechprotolab.
+  `ModulationSpectrum` (biodcase_tiny/feature_extraction) → 258-d per-clip
+  vector, cached by stem (`experiments/features/export_msab.py`). `FiLM2d` +
+  `SlimCNNFiLM` (MSAB standardized + projected to 32-d, FiLM after each DS
+  block; 66k params / 5.9M MACs). MSAB ctx threaded through the distillation
+  train + FiLM val/test loops. tflite export deferred (research-first; needs
+  a 2-input/on-device MSAB kernel only if it wins). Matched pair to isolate
+  the effect: `experiments/configs/C2/{c2_film,c2_nofilm}.yaml` (same base
+  arch + same Perch distillation, FiLM on/off). Smoke-tested end-to-end.

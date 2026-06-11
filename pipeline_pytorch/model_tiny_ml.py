@@ -55,6 +55,26 @@ class Baseline(ModelBase):
     return x
 
 
+class FiLM2d(nn.Module):
+  """
+  Feature-wise Linear Modulation for conv feature maps (Track C2).
+  Adapted from the BioME FiLM (Perez et al. 2018): a context vector produces
+  per-channel scale (gamma) and shift (beta) applied as x' = gamma*x + beta,
+  broadcast over the spatial dims. Lightweight side-channel conditioning.
+  """
+
+  def __init__(self, channels, context_dim):
+    super().__init__()
+    self.modulator = nn.Linear(context_dim, 2 * channels)
+
+  def forward(self, x, ctx):
+    # x: (B, C, H, W) ; ctx: (B, context_dim)
+    gamma, beta = self.modulator(ctx).chunk(2, dim=-1)
+    gamma = gamma.unsqueeze(-1).unsqueeze(-1)
+    beta = beta.unsqueeze(-1).unsqueeze(-1)
+    return gamma * x + beta
+
+
 class DepthwiseSeparableBlock(nn.Module):
   """
   MobileNet-style depthwise-separable block: 3x3 depthwise conv (optionally
@@ -130,6 +150,91 @@ class SlimCNN(ModelBase):
     x = self.features(x)
     x = self.classifier(x)
     return x
+
+
+class SlimCNNFiLM(ModelBase):
+  """
+  Track C2 student: SlimCNN conditioned on MSAB modulation features via FiLM
+  (the BioME idea ported to a tiny CNN). The MSAB context vector is BatchNorm-
+  standardized (the raw values are tiny) and injected after each depthwise-
+  separable block through a per-block FiLM2d layer. forward takes (mel, ctx).
+  """
+
+  def define_network_structure(self):
+
+    assert len(self.cfg['input_shape']) == 3
+    self.needs_context = True   # signals the training loop to feed the MSAB ctx
+
+    stem_ch = self.cfg.get('stem_ch', 24)
+    block_widths = self.cfg.get('block_widths', [48, 64, 96, 128])
+    block_strides = self.cfg.get('block_strides', [2, 2, 2, 1])
+    head_dim = self.cfg.get('head_dim', 64)
+    dropout = self.cfg.get('dropout', 0.1)
+    self.ctx_dim = self.cfg.get('ctx_dim', 258)
+    ctx_proj_dim = self.cfg.get('ctx_proj_dim', 32)
+    assert len(block_widths) == len(block_strides), "block_widths and block_strides must match"
+
+    # stem
+    self.stem = nn.Sequential(
+      nn.Conv2d(self.cfg['input_shape'][0], stem_ch, kernel_size=3, stride=1, padding=1, bias=False),
+      nn.BatchNorm2d(stem_ch),
+      nn.ReLU(),
+    )
+
+    # context path: standardize the (tiny-valued) MSAB, then project to a
+    # compact shared context so the per-block FiLM modulators stay cheap
+    self.ctx_norm = nn.BatchNorm1d(self.ctx_dim)
+    self.ctx_proj = nn.Sequential(nn.Linear(self.ctx_dim, ctx_proj_dim), nn.ReLU())
+
+    # DS blocks, each followed by a FiLM2d conditioned on the projected context
+    self.blocks = nn.ModuleList()
+    self.films = nn.ModuleList()
+    in_ch = stem_ch
+    for out_ch, stride in zip(block_widths, block_strides):
+      self.blocks.append(DepthwiseSeparableBlock(in_ch, out_ch, stride=stride))
+      self.films.append(FiLM2d(out_ch, ctx_proj_dim))
+      in_ch = out_ch
+
+    self.pool = nn.AdaptiveAvgPool2d((1, 1))
+    self.classifier = nn.Sequential(
+      nn.Flatten(),
+      nn.Dropout(dropout),
+      nn.Linear(in_ch, head_dim),
+      nn.ReLU(),
+      nn.Linear(head_dim, self.cfg['num_classes']),
+    )
+
+  def forward(self, x, ctx=None):
+    assert ctx is not None, "SlimCNNFiLM requires the MSAB context vector"
+    ctx = self.ctx_proj(self.ctx_norm(ctx))
+    x = self.stem(x)
+    for block, film in zip(self.blocks, self.films):
+      x = film(block(x), ctx)
+    x = self.pool(x)
+    return self.classifier(x)
+
+  # -- two-input variants of the base counting / export helpers --------------
+
+  def _torchinfo_total(self, col):
+    import torchinfo
+    was_training = self.training
+    self.eval()
+    dummy = (torch.zeros((1,) + tuple(self.cfg['input_shape']), device=self.device),
+             torch.zeros(1, self.ctx_dim, device=self.device))
+    total = getattr(torchinfo.summary(self, input_data=dummy, col_names=[col], verbose=0),
+                    'total_params' if col == 'num_params' else 'total_mult_adds')
+    if was_training: self.train()
+    return total
+
+  def count_params(self): return self._torchinfo_total('num_params')
+  def count_operations(self): return self._torchinfo_total('mult_adds')
+
+  def save_model_to_tflite(self):
+    # C2 is research-first: the deployable path needs a 2-input tflite plus an
+    # on-device MSAB kernel. Defer until the host-side gain justifies it.
+    print("\n*** SlimCNNFiLM: tflite export deferred (research phase). "
+          "float .pth metrics are logged; build the 2-input/on-device path only if MSAB-FiLM wins.")
+    return
 
 
 

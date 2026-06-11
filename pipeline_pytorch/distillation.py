@@ -30,27 +30,69 @@ def load_teacher_logits(teacher_dir, split):
   return {str(s): logits[i] for i, s in enumerate(stems)}
 
 
+def load_msab(msab_dir, split):
+  """
+  load exported MSAB context vectors for a split -> {stem: msab (msab_dim,)}
+  """
+
+  d = np.load(Path(msab_dir) / '{}.npz'.format(split), allow_pickle=True)
+  stems, msab = d['stems'], d['msab'].astype(np.float32)
+  return {str(s): msab[i] for i, s in enumerate(stems)}
+
+
+def _sid_to_array(datamodule, stem_to_array, what):
+  """
+  map each sample id to its per-clip array via the datamodule's sid->stem map;
+  fail loudly on any missing stem
+  """
+
+  out, missing = {}, 0
+  for sid in [int(s) for s in datamodule.sample_ids]:
+    stem = datamodule.get_file_name_id_by_single_sid(sid)
+    a = stem_to_array.get(stem)
+    if a is None: missing += 1
+    else: out[sid] = a
+  if missing: raise ValueError('{}: {} samples have no entry (stem mismatch)'.format(what, missing))
+  return out
+
+
+class ContextDataset(torch.utils.data.Dataset):
+  """
+  wraps a feature dataset and attaches the MSAB context vector per sample,
+  looked up by stem. returns (mel, y, sid, ctx). used for validation/test of
+  FiLM models (no teacher logits needed there).
+  """
+
+  def __init__(self, base_dataset, datamodule, stem_to_ctx):
+    super().__init__()
+    self.base = base_dataset
+    self.sid_to_ctx = _sid_to_array(datamodule, stem_to_ctx, 'ContextDataset')
+
+  def __len__(self):
+    return len(self.base)
+
+  def __getitem__(self, idx):
+    x, y, sid = self.base[idx]
+    ctx = torch.from_numpy(self.sid_to_ctx[int(sid)]).float()
+    return x, y, sid, ctx
+
+
 class TeacherLogitDataset(torch.utils.data.Dataset):
   """
   wraps the (augmented) student dataset and attaches the teacher's logits
   for each sample, looked up by stem via the datamodule's sid -> stem map
   """
 
-  def __init__(self, base_dataset, datamodule, stem_to_logits, num_classes):
+  def __init__(self, base_dataset, datamodule, stem_to_logits, num_classes, stem_to_ctx=None):
 
     super().__init__()
     self.base = base_dataset
     self.num_classes = num_classes
 
     # precompute sid -> teacher logits, fail loudly on any miss
-    self.sid_to_logits = {}
-    missing = 0
-    for sid in [int(s) for s in datamodule.sample_ids]:
-      stem = datamodule.get_file_name_id_by_single_sid(sid)
-      t = stem_to_logits.get(stem)
-      if t is None: missing += 1
-      else: self.sid_to_logits[sid] = t
-    if missing: raise ValueError('TeacherLogitDataset: {} samples have no teacher logits (stem mismatch)'.format(missing))
+    self.sid_to_logits = _sid_to_array(datamodule, stem_to_logits, 'TeacherLogitDataset')
+    # optional sid -> MSAB context (for FiLM students, track C2)
+    self.sid_to_ctx = _sid_to_array(datamodule, stem_to_ctx, 'TeacherLogitDataset(ctx)') if stem_to_ctx is not None else None
 
 
   def __len__(self):
@@ -60,7 +102,10 @@ class TeacherLogitDataset(torch.utils.data.Dataset):
   def __getitem__(self, idx):
     x, y, sid = self.base[idx]
     t_logits = torch.from_numpy(self.sid_to_logits[int(sid)]).float()
-    return x, y, sid, t_logits
+    if self.sid_to_ctx is None:
+      return x, y, sid, t_logits
+    ctx = torch.from_numpy(self.sid_to_ctx[int(sid)]).float()
+    return x, y, sid, t_logits, ctx
 
 
 def mixup_with_teacher(x, y, t_logits, num_classes, alpha=0.2, p=0.5):

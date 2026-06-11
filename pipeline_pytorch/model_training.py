@@ -21,7 +21,7 @@ from plots import plot_confusion_matrix
 from pipeline_pytorch.paths import MODELS_DIR, CM_FIG_PATH
 from pipeline_pytorch.pytorch_datamodule import DataloaderPytorch
 from pipeline_pytorch.augmentation import FeatureAugmentDataset, mixup_batch
-from pipeline_pytorch.distillation import TeacherLogitDataset, load_teacher_logits, mixup_with_teacher, distillation_loss
+from pipeline_pytorch.distillation import TeacherLogitDataset, ContextDataset, load_teacher_logits, load_msab, mixup_with_teacher, distillation_loss
 from pipeline_pytorch.model_tiny_ml import Baseline
 
 
@@ -35,7 +35,25 @@ RECIPE_DEFAULTS = {
   # logit distillation from the Perch teacher (track C1); disabled by default
   'distillation': {'enabled': False, 'teacher_dir': '', 'alpha': 0.5, 'temperature': 3.0,
                    'label_smoothing': 0.1, 'train_split': 'Train'},
+  # MSAB context for FiLM students (track C2); used only if the model needs it
+  'context': {'msab_dir': '', 'train_split': 'Train', 'eval_split': 'Validation'},
 }
+
+
+def context_of(model, data):
+  """
+  MSAB context tensor (always the last batch element) for FiLM students that
+  declare needs_context, else None. The dataset only appends ctx for such
+  models, so needs_context <=> ctx is data[-1].
+  """
+  if getattr(model, 'needs_context', False):
+    return data[-1].to(device=model.device, dtype=torch.float32)
+  return None
+
+
+def forward_with_ctx(model, x, ctx):
+  """call model.forward(x) or model.forward(x, ctx) depending on the model"""
+  return model.forward(x, ctx) if ctx is not None else model.forward(x)
 
 
 def make_scheduler(cfg_scheduler, optimizer, num_epochs):
@@ -67,8 +85,14 @@ def run_validation_epoch(model, dataloader_validation):
   # validation loader
   for data in dataloader_validation:
 
-    # validation step
-    y_hat, loss = model.validation_step(data)
+    # forward (with MSAB context for FiLM students), then loss + metrics
+    with torch.no_grad():
+      x = data[0].to(device=model.device, dtype=torch.float32)
+      y = data[1].to(device=model.device)
+      ctx = context_of(model, data)
+      y_hat = forward_with_ctx(model, x, ctx)
+      loss = model.criterion(y_hat, y).item()
+      y_hat = model.prediction_post_processing(y_hat)
 
     # collect
     y_targets.append(data[1].numpy())
@@ -131,14 +155,17 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     for data in dataloader_train:
 
       if distill_on:
-        # data: (x, y, sid, teacher_logits) -> joint mixup, then KL+CE
+        # data: (x, y, sid, teacher_logits[, ctx]) -> joint mixup, then KL+CE
+        # (ctx is the last element for FiLM students; mixup is off in the C2
+        #  recipe, so x and ctx stay aligned)
         x, y_soft, t_logits = mixup_with_teacher(data[0], data[1], data[3], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
         x = x.to(device=model.device, dtype=torch.float32)
         y_soft = y_soft.to(device=model.device)
         t_logits = t_logits.to(device=model.device)
+        ctx = context_of(model, data)
 
         model.optimizer.zero_grad()
-        student_logits = model.forward(x)
+        student_logits = forward_with_ctx(model, x, ctx)
         loss_t, _ = distillation_loss(student_logits, t_logits, y_soft,
                                       alpha=cfg_distill.get('alpha', 0.5),
                                       temperature=cfg_distill.get('temperature', 3.0),
@@ -219,10 +246,14 @@ def run_model_testing(cfg, model, dataloader_test, label_dict, run_logger=None):
   y_targets, y_outputs = [], []
 
   # test loader
+  model.set_model_to_evaluation_mode()
   for data in dataloader_test:
 
-    # prediction
-    y_hat = model.predict(data[0])
+    # prediction (with MSAB context for FiLM students)
+    with torch.no_grad():
+      x = data[0].to(device=model.device, dtype=torch.float32)
+      ctx = context_of(model, data)
+      y_hat = model.prediction_post_processing(forward_with_ctx(model, x, ctx))
 
     # collect
     y_targets.append(data[1].numpy())
@@ -266,37 +297,51 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
 
   # recipe config with defaults
   recipe = {**RECIPE_DEFAULTS, **cfg_framework.get('training_recipe', {})}
+  num_classes = len(datamodule_train.get_label_dict())
+  input_shape = datamodule_train.get_feature_shape_at_load()
+
+  # build the model first (so we can tell if it needs MSAB context for FiLM)
+  model_class = getattr(importlib.import_module(cfg_framework['model']['module']), cfg_framework['model']['attr'])
+  model_kwargs_overwrite = {'input_shape': input_shape, 'num_classes': num_classes, 'save_path': str(MODELS_DIR)}
+  model = model_class(*cfg_framework['model']['args'], **{**cfg_framework['model']['kwargs'], **model_kwargs_overwrite})
+  needs_context = getattr(model, 'needs_context', False)
+
+  # MSAB context (track C2 FiLM students): load per-split stem -> ctx
+  cfg_context = recipe.get('context', {}) or {}
+  ctx_train = ctx_eval = None
+  if needs_context:
+    msab_dir = cfg_context['msab_dir']
+    ctx_train = load_msab(msab_dir, cfg_context.get('train_split', 'Train'))
+    ctx_eval = load_msab(msab_dir, cfg_context.get('eval_split', 'Validation'))
+    print('FiLM context enabled - MSAB from: {}'.format(msab_dir))
 
   # train dataset with dynamic augmentation (train split only)
   dataset_train = FeatureAugmentDataset(DataloaderPytorch(datamodule_train), cfg=recipe.get('augmentation', {}))
 
-  # attach teacher logits for distillation (track C1)
+  # attach teacher logits for distillation (track C1) + optional MSAB ctx (C2)
   cfg_distill = recipe.get('distillation', {}) or {}
   if cfg_distill.get('enabled', False):
-    teacher_dir = cfg_distill['teacher_dir']
-    stem_to_logits = load_teacher_logits(teacher_dir, cfg_distill.get('train_split', 'Train'))
-    dataset_train = TeacherLogitDataset(dataset_train, datamodule_train, stem_to_logits, len(datamodule_train.get_label_dict()))
-    print('Distillation enabled - teacher logits from: {} ({} train samples aligned)'.format(teacher_dir, len(dataset_train)))
+    stem_to_logits = load_teacher_logits(cfg_distill['teacher_dir'], cfg_distill.get('train_split', 'Train'))
+    dataset_train = TeacherLogitDataset(dataset_train, datamodule_train, stem_to_logits, num_classes, stem_to_ctx=ctx_train)
+    print('Distillation enabled - teacher logits from: {} ({} train samples aligned)'.format(cfg_distill['teacher_dir'], len(dataset_train)))
+  elif needs_context:
+    dataset_train = ContextDataset(dataset_train, datamodule_train, ctx_train)
 
-  # dataloader
+  # validation / test datasets (attach MSAB ctx for FiLM students)
+  dataset_val = DataloaderPytorch(datamodule_validation)
+  dataset_test = DataloaderPytorch(datamodule_test)
+  if needs_context:
+    dataset_val = ContextDataset(dataset_val, datamodule_validation, ctx_eval)
+    dataset_test = ContextDataset(dataset_test, datamodule_test, ctx_eval)
+
+  # dataloaders
   dataloader_train = torch.utils.data.DataLoader(dataset_train, **cfg_framework['dataloader_train_kwargs'])
-  dataloader_validation = torch.utils.data.DataLoader(DataloaderPytorch(datamodule_validation), **cfg_framework['dataloader_validation_and_test_kwargs'])
-  dataloader_test = torch.utils.data.DataLoader(DataloaderPytorch(datamodule_test), **cfg_framework['dataloader_validation_and_test_kwargs'])
+  dataloader_validation = torch.utils.data.DataLoader(dataset_val, **cfg_framework['dataloader_validation_and_test_kwargs'])
+  dataloader_test = torch.utils.data.DataLoader(dataset_test, **cfg_framework['dataloader_validation_and_test_kwargs'])
 
-  # model
-  input_shape = datamodule_train.get_feature_shape_at_load()
-
-  # model class
-  model_class = getattr(importlib.import_module(cfg_framework['model']['module']), cfg_framework['model']['attr'])
-
-  # model kwargs
-  model_kwargs_overwrite = {'input_shape': input_shape, 'num_classes': len(datamodule_train.get_label_dict()), 'save_path': str(MODELS_DIR)}
-
-  # model
-  model = model_class(*cfg_framework['model']['args'], **{**cfg_framework['model']['kwargs'], **model_kwargs_overwrite})
-
-  # summary
-  summary(model, input_size=input_shape, device=model.get_device_type_str())
+  # summary (single-input torchsummary doesn't support FiLM's 2-input forward)
+  if not needs_context:
+    summary(model, input_size=input_shape, device=model.get_device_type_str())
 
   # run logging
   if run_logger is not None:
