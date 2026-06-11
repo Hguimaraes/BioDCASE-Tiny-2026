@@ -27,6 +27,7 @@ def _no_augmentation(recipe):
 
 def main():
   base = yaml.safe_load(open(ROOT / 'config.yaml'))
+  base['skip_deployment_flag'] = True   # experiments never flash the board (deploy is a separate manual step)
   OUT.mkdir(parents=True, exist_ok=True)
 
   variants = {}

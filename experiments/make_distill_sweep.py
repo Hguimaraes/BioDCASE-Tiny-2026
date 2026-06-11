@@ -24,6 +24,7 @@ TEMPERATURES = [2.0, 4.0]
 
 def main():
   base = yaml.safe_load(open(BASE))
+  base['skip_deployment_flag'] = True   # experiments never flash the board
   OUT.mkdir(parents=True, exist_ok=True)
 
   for alpha in ALPHAS:
