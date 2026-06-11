@@ -236,3 +236,12 @@ moves by `git pull`, results come back as committed run records.
   (2) Track B slimmer-but-stronger student (the teacher gap is still huge,
   0.60 vs 0.89, so architecture is now the main lever). Augmentation, if
   revisited, must be much gentler.
+- **2026-06-10 (cont.)** — Track B started (`feature/slim-cnn`). Added
+  `SlimCNN`: MobileNet-style depthwise-separable student on the same mel
+  input (1×40×133), keeping it drop-in deployable. Default 35k params /
+  5.9M MACs (vs baseline 97k / 23.3M; int8 ~74 KB vs 111 KB) — 4× fewer
+  MACs, so on-device model time should drop sharply too. Configs:
+  `experiments/configs/trackB/{slim_default,slim_wide,slim_deep}.yaml`
+  (+ Perch distillation, no aug). Smoke-tested end-to-end incl. int8.
+  Cluster run pending; question is whether the DS arch distills better than
+  the dense baseline at equal/lower budget.
