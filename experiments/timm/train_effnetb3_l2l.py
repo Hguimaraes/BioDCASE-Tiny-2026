@@ -124,10 +124,14 @@ def main():
   Tsp = None
   if args.feature_distill == 'on':
     s2s = load_teacher_spatial('Train')
-    Tsp = np.stack([s2s[s] for s in str_stems]).astype(np.float32)   # (N,Ct,H,W)
+    Tsp = np.stack([s2s[s] for s in str_stems]).astype(np.float32)   # (N,H,W,C) NHWC from TF
+    # Perch (TF/Keras) spatial_embedding is channels-LAST: (16,4,1536)=(time,freq,ch).
+    # -> NCHW for torch; align_teacher() then transposes (time,freq)->(freq,time) to
+    # match the student's (freq,time) map.
+    Tsp = np.ascontiguousarray(Tsp.transpose(0, 3, 1, 2))            # (N,C,H,W)=(N,1536,16,4)
     teacher_ch = Tsp.shape[1]
     proj = nn.Conv2d(model.feat_ch, teacher_ch, kernel_size=1).to(dev)
-    print('  teacher spatial {} | projecting student {} -> {} ch'.format(
+    print('  teacher spatial (NCHW) {} | projecting student {} -> {} ch'.format(
         Tsp.shape, model.feat_ch, teacher_ch))
 
   params = list(model.parameters()) + (list(proj.parameters()) if proj else [])
