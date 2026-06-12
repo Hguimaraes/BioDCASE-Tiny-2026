@@ -125,15 +125,25 @@ Branch: `feature/msab-film`
   contribution on top of C1.
 
 ### Track D — Feature extraction budget
-Branch: `feature/feature-tuning`
-- Stay within the provided mel pipeline (deployable for free); sweep
-  n_mels ∈ {32, 40, 64}, stride ∈ {512, 768, 1024}, band limits.
-  Feature time is only 3.1 ms vs 330 ms model time, so the win here is
-  *input-size reduction* → fewer model MACs, not feature time itself.
-- Custom features (e.g. modulation spectrum, PCEN): treat as
-  research-only unless we commit to writing the embedded C kernel
-  (README warns this is non-trivial). Decide explicitly (see open
-  questions).
+Branch: `feature/pcen-frontend`
+- **PCEN front-end is the project's biggest single win.** Swapping the int
+  log-mel for a Perch-like **PCEN-mel** (same framing: 24 kHz, 40 mel, win
+  4096 / hop 512 → (1,40,133); only the compression changes) lifts the
+  distilled Baseline from **0.5974 → 0.6497 ACC (+5.2), 0.9099 → 0.9296 AUC**
+  over 3 non-overlapping seeds. PCEN = per-channel AGC (EMA-smoothed energy
+  normalization) with Perch's bioacoustic params (`smoothing_coef=0.145,
+  gain=0.8, bias=10, root=4`, Lostanlen "PCEN: Why and How"). Ported to torch
+  in `biodcase_tiny/feature_extraction/pcen_mel.py`; switched via
+  `feature_type: pcen_mel` in the feature handler. Configs:
+  `experiments/configs/pcen_distill{,_80mel}.yaml`.
+- Deployability: **unlike the MSAB kernel we declined, PCEN has a real
+  embedded path** — it was designed for low-power devices and `perch` ships a
+  streaming `fixed_pcen`. Promote to the on-device feature pipeline (fixed
+  point) for the submission candidate.
+- Still open: n_mels 40→**80** (input H doubles, ~2× conv MACs, params ~same;
+  pushes resolution toward Perch's 128), stride ∈ {512, 768, 1024}, band
+  limits. Within the *provided* int mel pipeline these are deployable for free
+  (input-size reduction → fewer model MACs).
 
 ### Track E — Compression: QAT, pruning, structured slimming
 Branch: `feature/qat-compression`
@@ -270,3 +280,17 @@ moves by `git pull`, results come back as committed run records.
   doesn't carry to this tiny-CNN/40-mel/11-class setting at budget. Confirm
   with 3 seeds, then document as a negative result. Working best stays pure
   Perch distillation (~0.597); efficiency story = slim_default 76 KB.
+- **2026-06-12** — Track D (`feature/pcen-frontend`): **PCEN front-end is a
+  decisive win and the new project best.** Hypothesis (user's): the student
+  plateau (~0.57–0.60 across all archs in Track B) is the *input
+  representation*, not the model — so match the teacher's compression. Swapped
+  the int log-mel for a torch **PCEN-mel** at identical framing (only log→PCEN,
+  Perch's bio params, 50 Hz low edge). Result over 3 seeds: **0.6497/0.9296 vs
+  log-mel 0.5974/0.9099 = +5.2 ACC / +2.0 AUC**, distributions non-overlapping
+  (PCEN worst 0.643 > log-mel best 0.607). Clears every bar; confirms the
+  plateau was the front-end. Note: this is *not* teacher-alignment in the
+  distill sense (teacher logits are fixed, from Perch's own internal frontend)
+  — PCEN is simply a better front-end for the tiny CNN. Unlike MSAB, PCEN has a
+  fixed-point embedded path (`perch` `fixed_pcen`), so it's promotable to the
+  device. Next: 80-mel variant (`pcen_distill_80mel.yaml`), then a fixed-point
+  PCEN deployment check.

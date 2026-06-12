@@ -38,6 +38,7 @@ class FeatureHandler():
 
     # default config
     cfg_default = {
+      'feature_type': 'log_mel',   # 'log_mel' (device int pipeline) | 'pcen_mel' (Perch-like)
       'target_sample_rate': 24000,
       'window_len': 4096,
       'window_stride': 512,
@@ -62,6 +63,20 @@ class FeatureHandler():
     """
     define
     """
+
+    # PCEN-mel front-end (Track D): a float, Perch-like compression in place of
+    # the int log-mel. Matches framing/mel-count so it's a clean log-vs-PCEN A/B.
+    if self.cfg['feature_type'] == 'pcen_mel':
+      from biodcase_tiny.feature_extraction.pcen_mel import PCENMel
+      self.pcen_mel = PCENMel(
+        sample_rate=self.cfg['target_sample_rate'],
+        window_len=self.cfg['window_len'],
+        window_stride=self.cfg['window_stride'],
+        n_mels=self.cfg['mel_n_channels'],
+        f_min=float(self.cfg['mel_low_hz']),
+        f_max=self.cfg['target_sample_rate'] / 2,
+      )
+      return
 
     # feature constants
     self.feature_constants = make_constants(
@@ -101,23 +116,28 @@ class FeatureHandler():
     # to numpy
     if not isinstance(x, np.ndarray): x = np.array(x)
 
-    # ensure integer - required for our tiny ml feature extractions
-    if np.issubdtype(x.dtype, np.floating):
+    # PCEN-mel path: already (n_mels, n_frames) float, same orientation the int
+    # path reaches after its transpose -> skip int-cast and transpose.
+    if self.cfg['feature_type'] == 'pcen_mel':
+      x_t = self.pcen_mel.extract_numpy(x)
+    else:
+      # ensure integer - required for our tiny ml feature extractions
+      if np.issubdtype(x.dtype, np.floating):
 
-      # normalize [-1, 1]
-      x = x / np.max(np.abs(x))
+        # normalize [-1, 1]
+        x = x / np.max(np.abs(x))
 
-      # to int16
-      x = (x * np.iinfo(np.int16).max).astype(np.int16)
+        # to int16
+        x = (x * np.iinfo(np.int16).max).astype(np.int16)
 
-    # extract
-    x_t = self.do_windows_fn(x)
+      # extract
+      x_t = self.do_windows_fn(x)
 
-    # to float?
-    if self.cfg['to_float']: x_t = x_t.astype(np.float32)
+      # to float?
+      if self.cfg['to_float']: x_t = x_t.astype(np.float32)
 
-    # transpose
-    if self.cfg['transpose_features_extracted']: x_t = x_t.T
+      # transpose
+      if self.cfg['transpose_features_extracted']: x_t = x_t.T
 
     # add channel dimension
     if self.cfg['add_channel_dimension']: x_t = x_t[np.newaxis, :] if not self.cfg['channel_dimension_at_end'] else x_t[:, :, np.newaxis]
