@@ -30,3 +30,4 @@ experiments/perch/embeddings/**/Validation.npz
 
 # smoke-test run records (transient)
 experiments/runs/*smoke*
+experiments/timm/embeddings/

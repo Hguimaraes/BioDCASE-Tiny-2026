@@ -320,3 +320,16 @@ moves by `git pull`, results come back as committed run records.
   (`test_efficientnet_ln`) mean-embedding + MLP probe on PCEN hit 0.5738/0.8859
   — generic vision features transfer decently but below our best; end-to-end
   fine-tune (CE vs Perch-KD) is the pending follow-up.
+- **2026-06-12 (cont.)** — EfficientNet end-to-end fine-tune (`experiments/timm`,
+  whole backbone unfrozen, ImageNet-init, PCEN input, 1 seed, 30 ep):
+  **CE 0.5483/0.8787, Perch-KD 0.6557/0.9182** (134k params but ~4× MACs from
+  160×160). Three takeaways: (1) **distillation dominates** — KD lifted the
+  *same* model +10.7 ACC over CE (0.548→0.656); the teacher matters far more
+  than the architecture. (2) Plain CE fine-tune (0.548) is *below* the frozen
+  probe (0.574) — unfreezing all params on 2.2k clips overfits; only KD's soft
+  targets made full fine-tuning pay off. (3) vs our Baseline: KD-EffNet's ACC
+  0.6557 is within the Baseline's 3-seed spread (0.643–0.659, single seed,
+  best-ACC-epoch selection so optimistic) while its AUC 0.9182 is clearly
+  *below* Baseline's 0.9296 — so no robust gain, at ~4× compute and over the
+  deploy budget. **Not a submission candidate**; reinforces that the wins are
+  the PCEN front-end + Perch distillation, not the backbone.

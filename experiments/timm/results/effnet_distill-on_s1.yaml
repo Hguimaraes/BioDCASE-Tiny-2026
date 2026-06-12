@@ -1,0 +1,14 @@
+model: test_efficientnet_ln.r160_in1k
+mode: finetune_unfrozen
+distill: 'on'
+input: pcen_mel
+res: 160
+epochs: 30
+batch: 32
+lr: 0.0003
+seed: 1
+params: 134023
+val_acc: 0.6557
+val_auc: 0.9182
+best_epoch: 27
+finished_utc: '2026-06-12T20:55:50.230420'
