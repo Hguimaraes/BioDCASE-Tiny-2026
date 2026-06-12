@@ -155,9 +155,16 @@ Branch: `feature/qat-compression`
 - Low-rank/channel reduction of the 32→64→128 progression.
 
 ### Track F — Temporal pooling / SED heads
-Branch: `feature/sed-pooling-head`
-- Attention pooling or per-frame logits + max/mean pooling instead of
-  GAP; cheap (1×1 convs) and known to help on weak 3 s labels.
+Branch: `feature/crnn-recurrence`
+- **Recurrence (GRU) tested and rejected.** Ported Dhar's "MobileGRU" idea
+  onto our best model: kept the Baseline conv stack identical, replaced the
+  global-avg-pool head with freq-pool → GRU-over-time → temporal-pool → dense.
+  Both unidirectional and bidirectional GRUs **hurt** vs the plain Baseline
+  (0.6497 → uni 0.6333 → bi 0.6157), monotonically worse with more
+  recurrence/params. The 13-step sequence + temporal averaging gives the GRU
+  no room the conv+GAP didn't already use; extra params just overfit. Negative.
+- Still untried (cheaper, different mechanism): attention pooling or per-frame
+  logits + max/mean pooling instead of GAP (1×1 convs, no recurrence).
 
 ## 4. Process & infrastructure
 
@@ -294,3 +301,22 @@ moves by `git pull`, results come back as committed run records.
   fixed-point embedded path (`perch` `fixed_pcen`), so it's promotable to the
   device. Next: 80-mel variant (`pcen_distill_80mel.yaml`), then a fixed-point
   PCEN deployment check.
+- **2026-06-12 (cont.)** — Track D 80-mel: doubling mel resolution **hurts**
+  (0.610 vs 40-mel 0.6497, 2 clean seeds + an interrupted 3rd agreeing). The
+  tiny Baseline can't exploit the extra rows; 40 mel is better *and* cheaper
+  *and* the deployment-budget resolution. 40 mel stays default (informal note,
+  runs not committed).
+- **2026-06-12 (cont.)** — Track F (`feature/crnn-recurrence`): **recurrence
+  does not help — clean negative, tested two ways.** Ported Dhar's MobileGRU
+  onto our best: identical Baseline conv stack, head swapped to freq-pool → GRU
+  → temporal-pool → dense (`BaselineGRU`, `bidirectional` config flag). GRU
+  costs +13–30% params but <2% MACs (convs dominate, 13-step sequence). Results
+  (3 seeds each): Baseline 0.6497 → **uni-GRU 0.6333 (−1.6)** → **bi-GRU 0.6157
+  (−3.4)**. Monotonic: more recurrence/params → worse. Bidirectional (the fair
+  offline-whole-clip test) is the *worst*, so it's not a causal-constraint
+  issue — recurrence is the wrong inductive bias here and the params overfit.
+  Another non-transfer of a published idea to our tiny-CNN/PCEN/11-class setup.
+  Baseline (conv + GAP) stays best. Aside: a frozen tiny ImageNet EfficientNet
+  (`test_efficientnet_ln`) mean-embedding + MLP probe on PCEN hit 0.5738/0.8859
+  — generic vision features transfer decently but below our best; end-to-end
+  fine-tune (CE vs Perch-KD) is the pending follow-up.

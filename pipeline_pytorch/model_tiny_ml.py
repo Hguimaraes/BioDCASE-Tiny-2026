@@ -55,6 +55,82 @@ class Baseline(ModelBase):
     return x
 
 
+class BaselineGRU(ModelBase):
+  """
+  Track F CRNN: the exact Baseline conv stack followed by a GRU over time,
+  i.e. the "MobileGRU" idea (Dhar, BioDCASE 2025) ported onto our best model.
+
+  The only change vs Baseline is the head. Baseline collapses the conv map
+  (C, F, T) with a global avg-pool over BOTH freq and time -> the temporal
+  structure is discarded. Here we instead pool FREQUENCY only, leaving a
+  length-T sequence of C-dim vectors, run a GRU over it, then temporal-pool ->
+  dense. Conv layers (32->64->128), the PCEN front-end and the distillation
+  recipe are unchanged, so this isolates the effect of recurrence.
+  """
+
+  def define_network_structure(self, n_filters=32):
+
+    assert len(self.cfg['input_shape']) == 3
+
+    gru_hidden = self.cfg.get('gru_hidden', 32)   # paper's GRU size; +13% params vs Baseline
+    head_dim = self.cfg.get('head_dim', 32)
+    dropout = self.cfg.get('dropout', 0.05)
+    # we classify whole clips offline (not streaming), so the full sequence is
+    # available -> a bidirectional GRU can use future context too. Config flag.
+    bidirectional = self.cfg.get('bidirectional', False)
+
+    # identical conv feature extractor to Baseline, MINUS the global pool so
+    # the time axis survives into the GRU
+    self.features = nn.Sequential(
+        nn.Conv2d(self.cfg['input_shape'][0], n_filters, kernel_size=3),
+        nn.ReLU(),
+        nn.MaxPool2d(2),
+
+        nn.Conv2d(n_filters, n_filters * 2, kernel_size=3),
+        nn.ReLU(),
+        nn.MaxPool2d(4),
+
+        nn.Conv2d(n_filters * 2, n_filters * 4, kernel_size=3),
+        nn.ReLU(),
+    )
+
+    # collapse frequency only -> (B, C, 1, T); keep time as the GRU sequence
+    self.freq_pool = nn.AdaptiveAvgPool2d((1, None))
+    self.gru = nn.GRU(input_size=n_filters * 4, hidden_size=gru_hidden,
+                      batch_first=True, bidirectional=bidirectional)
+
+    # bidirectional GRU emits 2*hidden per step (forward+backward concatenated)
+    gru_out = gru_hidden * (2 if bidirectional else 1)
+
+    # temporal global avg-pool over the GRU sequence, then classify
+    self.classifier = nn.Sequential(
+        nn.Dropout(dropout),
+        nn.Linear(gru_out, head_dim),
+        nn.ReLU(),
+        nn.Linear(head_dim, self.cfg['num_classes']),
+    )
+
+  def forward(self, x):
+    x = self.features(x)                  # (B, C, F, T)
+    x = self.freq_pool(x).squeeze(2)      # (B, C, T)
+    x = x.permute(0, 2, 1)                # (B, T, C) sequence
+    x, _ = self.gru(x)                    # (B, T, H)
+    x = x.mean(dim=1)                     # temporal global average pool -> (B, H)
+    return self.classifier(x)
+
+  def save_model_to_tflite(self):
+    # research-first (Track F): GRU int8 on esp-nn is non-trivial, and the
+    # float export may not lower cleanly. Don't let an export failure crash a
+    # training run -- the .pth metrics are what we measure. Build the deployable
+    # path only if recurrence wins.
+    try:
+      return super().save_model_to_tflite()
+    except Exception as e:
+      print("\n*** BaselineGRU: tflite export deferred ({}). "
+            "float .pth metrics are logged.".format(type(e).__name__))
+      return
+
+
 class FiLM2d(nn.Module):
   """
   Feature-wise Linear Modulation for conv feature maps (Track C2).
