@@ -1,0 +1,210 @@
+version: 1.0
+skip_deployment_flag: true
+datamodule:
+  target_audio_slice_duration_ms: 3000
+  target_sample_rate: 24000
+  feature_extraction:
+    window_len: 4096
+    window_stride: 512
+    window_scaling_bits: 12
+    mel_n_channels: 40
+    mel_low_hz: 50
+    mel_high_hz: 7500
+    mel_post_scaling_bits: 6
+  feature_handler_add_kwargs:
+    target_sample_rate: 24000
+    transpose_features_extracted: true
+    normalize_features: true
+    to_float: true
+    add_channel_dimension: true
+    add_batch_dimension: false
+    channel_dimension_at_end: false
+    feature_type: pcen_mel
+    mel_low_hz: 50
+  dataset:
+    root_path: ../2026/Data/BioDCASE_2026_Task_3_TinyML_Dataset_V1
+    file_ext: .wav
+  intermediate:
+    root_path: ./output/01_intermediate
+    intermediate_id: intermediate0
+    filter_files:
+      is_used: false
+      re_contains: .*
+    file_naming:
+      target_file_ext: .npz
+      method: keeping_parent_folder
+    compress: true
+  caching:
+    root_path: ./output/02_features
+    cache_id: cache_pcen
+    filter_files:
+      is_used: false
+      re_contains: .*
+    file_naming:
+      target_file_ext: .npz
+      method: keeping_parent_folder
+    compress: true
+  load_cache:
+    load_on_init: false
+    filter_files:
+      is_used: false
+      re_contains: .*
+  train_folder: Train
+  validation_folder: Validation
+  test_folder: Validation
+  load_set_on_init: null
+  redo_all: false
+  redo_intermediate: false
+  redo_cache: false
+  verbose: false
+pytorch_framework:
+  experiment:
+    name: pcen-effnetb3
+    track: G
+    runs_dir: ./experiments/runs
+    seed: 42
+    notes: 'Track G: slimmed EfficientNet-B3 (~190k, Perch-shaped backbone) + PCEN
+      + Perch distillation, no aug'
+  training_recipe:
+    augmentation:
+      enabled: false
+      time_mask:
+        num: 2
+        max_width: 24
+        p: 0.5
+      freq_mask:
+        num: 2
+        max_width: 8
+        p: 0.5
+      gaussian_noise:
+        std: 0.03
+        p: 0.3
+      mask_fill_value: 0.0
+    mixup:
+      alpha: 0.0
+      p: 0.0
+    scheduler:
+      name: cosine
+      warmup_epochs: 5
+      min_lr_factor: 0.05
+    best_checkpoint_metric: val_auc
+    early_stopping_patience: 30
+    distillation:
+      enabled: true
+      teacher_dir: ./experiments/perch/embeddings/perch_v2_cpu/teacher_mlp
+      alpha: 0.5
+      temperature: 3.0
+      label_smoothing: 0.1
+      train_split: Train
+  dataloader_train_kwargs:
+    batch_size: 32
+    shuffle: true
+  dataloader_validation_and_test_kwargs:
+    batch_size: 32
+    shuffle: false
+  model:
+    module: pipeline_pytorch.model_tiny_ml
+    attr: EffNetB3Slim
+    args: []
+    kwargs:
+      device:
+        use_cpu: false
+        device_name: cuda:0
+      criterion:
+        module: torch.nn
+        attr: CrossEntropyLoss
+        kwargs:
+          label_smoothing: 0.0
+      optimizer:
+        module: torch.optim
+        attr: Adam
+        kwargs:
+          lr: 0.001
+          betas:
+          - 0.9
+          - 0.999
+      verbose: false
+      channel_multiplier: 0.13
+      depth_multiplier: 1.4
+      head_dim: 64
+      dropout: 0.2
+  model_training:
+    num_epochs: 120
+tensorflow_framework:
+  model_training:
+    seed: 42
+    n_epochs: 100
+    shuffle_buff_n: 10000
+    batch_size: 32
+    early_stopping:
+      patience: 100
+generate_embedded_code:
+  template_dir: ./biodcase_tiny/embedded/firmware
+  gen_code_dir: ./output/05_generated_embedded_code
+  gen_code_source_folder_name: src
+  serial_device: /dev/ttyUSB0
+  quantize: true
+inference_handler_pytorch:
+  add_python_paths: []
+  target_sample_rate: 24000
+  target_wav_length_sec: 3
+  model_dir: ./submission/your_submission_model
+  saved_model_extension: .pth
+  tflite_model_extension: .tflite
+  label_dict_yaml_path: ./submission/your_submission_model/label_dict.yaml
+  feature_handler:
+    module: feature_handler
+    attr: FeatureHandler
+    args: []
+    kwargs:
+      target_sample_rate: 24000
+      window_len: 4096
+      window_stride: 512
+      window_scaling_bits: 12
+      mel_n_channels: 40
+      mel_low_hz: 125
+      mel_high_hz: 7500
+      mel_post_scaling_bits: 6
+      transpose_features_extracted: true
+      normalize_features: true
+      to_float: true
+      add_channel_dimension: true
+      add_batch_dimension: true
+      channel_dimension_at_end: false
+  model:
+    module: pipeline_pytorch.model_tiny_ml
+    attr: Baseline
+    args: []
+    kwargs: {}
+inference_handler_tensorflow:
+  add_python_paths: []
+  target_sample_rate: 24000
+  target_wav_length_sec: 3
+  model_dir: ./submission/your_submission_model
+  saved_model_extension: .keras
+  tflite_model_extension: .tflite
+  label_dict_yaml_path: ./submission/your_submission_model/label_dict.yaml
+  feature_handler:
+    module: feature_handler
+    attr: FeatureHandler
+    args: []
+    kwargs:
+      target_sample_rate: 24000
+      window_len: 4096
+      window_stride: 512
+      window_scaling_bits: 12
+      mel_n_channels: 40
+      mel_low_hz: 125
+      mel_high_hz: 7500
+      mel_post_scaling_bits: 6
+      transpose_features_extracted: true
+      normalize_features: true
+      to_float: true
+      add_channel_dimension: true
+      add_batch_dimension: true
+      channel_dimension_at_end: true
+  model:
+    module: keras
+    attr: Model
+    args: []
+    kwargs: {}

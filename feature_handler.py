@@ -78,6 +78,26 @@ class FeatureHandler():
       )
       return
 
+    # Perch-resolution PCEN front-end (Track G): replicate Perch v2's frontend
+    # exactly — resample to 32 kHz, pad to a 5 s window, 128 mel, 50–16000 Hz,
+    # hop 320 (100 fps) / win 640 / nfft 1024 — so the spectrogram is (128, ~500)
+    # and a B3-shaped student produces feature maps that spatially match the
+    # teacher's at every stage (for layer-to-layer distillation).
+    if self.cfg['feature_type'] == 'pcen_mel_perch':
+      from biodcase_tiny.feature_extraction.pcen_mel import PCENMel
+      self.pcen_mel = PCENMel(
+        sample_rate=self.cfg['target_sample_rate'],
+        resample_to=self.cfg.get('perch_sample_rate', 32000),
+        pad_seconds=self.cfg.get('perch_window_s', 5.0),
+        window_stride=self.cfg.get('perch_hop', 320),
+        window_len=self.cfg.get('perch_win', 640),
+        n_fft=self.cfg.get('perch_nfft', 1024),
+        n_mels=self.cfg.get('perch_n_mels', 128),
+        f_min=self.cfg.get('perch_f_min', 50.0),
+        f_max=self.cfg.get('perch_f_max', 16000.0),
+      )
+      return
+
     # feature constants
     self.feature_constants = make_constants(
       win_samples=self.cfg['window_len'],
@@ -118,7 +138,7 @@ class FeatureHandler():
 
     # PCEN-mel path: already (n_mels, n_frames) float, same orientation the int
     # path reaches after its transpose -> skip int-cast and transpose.
-    if self.cfg['feature_type'] == 'pcen_mel':
+    if self.cfg['feature_type'] in ('pcen_mel', 'pcen_mel_perch'):
       x_t = self.pcen_mel.extract_numpy(x)
     else:
       # ensure integer - required for our tiny ml feature extractions

@@ -59,18 +59,26 @@ class PCENMel:
   """
 
   def __init__(self, sample_rate=24000, window_len=4096, window_stride=512,
-               n_mels=40, f_min=50.0, f_max=None, power=1.0,
-               pcen_kwargs=None, device='cpu'):
+               n_mels=40, f_min=50.0, f_max=None, power=1.0, n_fft=None,
+               resample_to=None, pad_seconds=None, pcen_kwargs=None, device='cpu'):
     self.sample_rate = sample_rate
     self.device = device
-    f_max = f_max if f_max is not None else sample_rate / 2
     self.pcen_kwargs = {**PCEN_DEFAULTS, **(pcen_kwargs or {})}
 
-    # mel spectrogram with the SAME framing as the int pipeline. center=False
-    # + a left/right unpadded sliding window matches process_window framing
-    # (133 frames for 72000 samples, win 4096, hop 512).
+    # optional resample (e.g. 24k -> Perch's 32k) and pad/trim to a fixed window
+    # (e.g. 5 s) so the spectrogram matches the teacher's frontend resolution.
+    self.resampler = (torchaudio.transforms.Resample(sample_rate, resample_to).to(device)
+                      if resample_to and resample_to != sample_rate else None)
+    eff_sr = resample_to or sample_rate
+    self.pad_samples = int(round(pad_seconds * eff_sr)) if pad_seconds else None
+    n_fft = n_fft or window_len
+    f_max = f_max if f_max is not None else eff_sr / 2
+
+    # mel spectrogram. center=False + unpadded sliding window; for the device
+    # path (40 mel) this matches process_window framing (133 frames). For the
+    # Perch-resolution path (128 mel, 32k, hop 320) it yields ~500 frames.
     self.melspec = torchaudio.transforms.MelSpectrogram(
-      sample_rate=sample_rate, n_fft=window_len, win_length=window_len,
+      sample_rate=eff_sr, n_fft=n_fft, win_length=window_len,
       hop_length=window_stride, f_min=f_min, f_max=f_max, n_mels=n_mels,
       power=power, center=False, norm='slaney', mel_scale='slaney',
     ).to(device)
@@ -80,6 +88,14 @@ class PCENMel:
     single = wav.ndim == 1
     if single:
       wav = wav.unsqueeze(0)
+    if self.resampler is not None:
+      wav = self.resampler(wav)
+    if self.pad_samples is not None:                       # pad/trim to fixed window
+      T = wav.shape[-1]
+      if T < self.pad_samples:
+        wav = torch.nn.functional.pad(wav, (0, self.pad_samples - T))
+      elif T > self.pad_samples:
+        wav = wav[..., :self.pad_samples]
     mel = self.melspec(wav)                     # (B, n_mels, n_frames)
     out = pcen(mel, **self.pcen_kwargs)         # (B, n_mels, n_frames)
     return out.squeeze(0) if single else out

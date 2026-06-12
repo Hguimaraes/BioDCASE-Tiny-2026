@@ -313,6 +313,71 @@ class SlimCNNFiLM(ModelBase):
     return
 
 
+class EffNetB3Slim(ModelBase):
+  """
+  Perch-shaped student: a slimmed EfficientNet-B3 — the backbone Perch v2 uses
+  (chirp/models/perch_2.py) — narrowed to ~200k params, on the native PCEN
+  input. Keeps B3's depth/block structure (depth_multiplier=1.4) and only slims
+  the *width* (channel_multiplier=0.13 -> ~190k backbone params). in_chans=1
+  takes the (1,40,133) PCEN spectrogram directly (EfficientNet's 32x downsample
+  -> ~2x5 map -> global-pooled embedding), so no resize is needed. Trained from
+  scratch (no ImageNet weights exist at this width) with the same Perch
+  distillation as the best CNN, to test whether a teacher-shaped student helps.
+  """
+
+  def define_network_structure(self):
+    from timm.models.efficientnet import _gen_efficientnet
+
+    assert len(self.cfg['input_shape']) == 3
+    cm = self.cfg.get('channel_multiplier', 0.13)
+    dm = self.cfg.get('depth_multiplier', 1.4)     # keep B3 depth; slim width only
+    head_dim = self.cfg.get('head_dim', 64)
+    dropout = self.cfg.get('dropout', 0.2)
+
+    # slimmed B3 backbone -> pooled mean embedding (num_classes=0)
+    self.backbone = _gen_efficientnet(
+      'efficientnet_b3', channel_multiplier=cm, depth_multiplier=dm,
+      in_chans=self.cfg['input_shape'][0], num_classes=0)
+    emb_dim = self.backbone.num_features
+
+    self.classifier = nn.Sequential(
+      nn.LayerNorm(emb_dim),
+      nn.Dropout(dropout),
+      nn.Linear(emb_dim, head_dim),
+      nn.ReLU(),
+      nn.Linear(head_dim, self.cfg['num_classes']),
+    )
+
+  def forward(self, x):
+    return self.classifier(self.backbone(x))   # x: (B,1,C,T) -> emb -> logits
+
+  def forward_with_spatial(self, x):
+    """
+    Layer-to-layer distillation hook: returns (logits, spatial_map). The spatial
+    map is the pre-pool B3 feature map (B, num_features, H, W) -- the student
+    analogue of Perch's `spatial_embedding`, matched in spatial size by the
+    Perch-resolution front-end so a hint loss can compare them (channels are
+    projected). Same forward path as forward(), just also exposing the map.
+    """
+    feat = self.backbone.forward_features(x)       # (B, num_features, H, W)
+    emb = self.backbone.forward_head(feat)         # global-pool -> (B, num_features)
+    return self.classifier(emb), feat
+
+  # torchinfo can undercount timm blocks; use the exact parameter sum
+  def count_params(self):
+    return sum(p.numel() for p in self.parameters())
+
+  def save_model_to_tflite(self):
+    # research-first: EfficientNet (SiLU + squeeze-excite) may not lower cleanly
+    # to int8/esp-nn. Don't let an export failure crash a training run.
+    try:
+      return super().save_model_to_tflite()
+    except Exception as e:
+      print("\n*** EffNetB3Slim: tflite export deferred ({}). "
+            "float .pth metrics are logged.".format(type(e).__name__))
+      return
+
+
 
 if __name__ == '__main__':
   """
