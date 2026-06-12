@@ -261,3 +261,12 @@ moves by `git pull`, results come back as committed run records.
   a 2-input/on-device MSAB kernel only if it wins). Matched pair to isolate
   the effect: `experiments/configs/C2/{c2_film,c2_nofilm}.yaml` (same base
   arch + same Perch distillation, FiLM on/off). Smoke-tested end-to-end.
+- **2026-06-11 (cont.)** — C2 result (seed 42): MSAB-FiLM does **not** beat a
+  param-matched plain CNN. c2-film 0.5865/0.9005 (66k) vs c2-nofilm
+  0.5719/0.8991 (35k, same base) = +1.5 acc, BUT slim_wide (62k, no FiLM)
+  already hits 0.5865/0.9025 — so the gain is capacity, not the MSAB/FiLM
+  mechanism. Below the +3pt bar → don't build the on-device MSAB kernel.
+  Reads as negative transfer: BioME's MSAB-FiLM (transformer/BEANS/beehive)
+  doesn't carry to this tiny-CNN/40-mel/11-class setting at budget. Confirm
+  with 3 seeds, then document as a negative result. Working best stays pure
+  Perch distillation (~0.597); efficiency story = slim_default 76 KB.
