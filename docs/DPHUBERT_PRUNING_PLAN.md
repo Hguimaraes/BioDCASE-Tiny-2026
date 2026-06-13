@@ -1,10 +1,33 @@
 # Plan: DPHuBERT-style joint distillation + structured pruning to a 120k student
 
-Branch: `feature/dphubert-pruning` · drafted 2026-06-12 · status: **plan only, not implemented**
+Branch: `feature/dphubert-pruning` · drafted 2026-06-12 · status: **core implemented & validated**
 
 Goal: a student of **~120k parameters** obtained by *learned* structured pruning
 (channel selection) instead of hand-picked width, distilling from **Perch 2.0**.
 Builds on the Track G EfficientNet-B3 + layer-to-layer work (`feature/effnetb3-distill`).
+
+## Implementation status (2026-06-12)
+
+Built and smoke-validated in `experiments/pruning/`:
+- `hardconcrete.py` — FLOP/DPHuBERT Hard-Concrete L0 gate (differentiable `l0_norm`).
+- `gated_effnet.py` — EfficientNet-style net with gates on **MBConv expand
+  channels only** (block I/O fixed → no residual coupling). Differentiable
+  `get_num_params()`; `to_pruned()` rebuilds a compact gate-free model. Verified
+  `max|gated_eval − pruned| = 0.0` (exact, by folding the eval soft-mask scale
+  into the SE-reduce + project input weights).
+- `train_dphubert.py` — 3 stages (distill+prune / prune / final-distill) on the
+  **40-mel PCEN** student; logit KD from Perch + optional single `spatial_embedding`
+  hint (interpolated to the student grid). Lagrangian per DPHuBERT: weights at
+  `lr`, gates at `+reg_lr`, multipliers λ1/λ2 at `−reg_lr` (gradient ascent).
+- **Validation run** (base width 0.35 → 560k, target 120k, 50 stage-1 epochs):
+  expected sparsity climbed 0.006→0.766 tracking the 0.786 target, ~params
+  560k→131k; `prune()` → **134,543 params**, functional right after pruning
+  (acc 0.45, not random) → mechanism confirmed. (Accuracy not meaningful yet:
+  only 50 stage-1 + 1 final epoch.)
+
+Remaining: full-length runs (≈100 stage-1 + 60 final epochs), `--feature-distill on`
+(needs the `export_spatial.py` teacher dump), and eval vs the hand-slimmed 120k /
+Baseline. To hit exactly 120k, run the full schedule or nudge `reg_lr`/target.
 
 ---
 
