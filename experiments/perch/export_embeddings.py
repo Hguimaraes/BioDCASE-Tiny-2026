@@ -16,12 +16,19 @@
 
 import os
 import sys
+import time
 import argparse
 import numpy as np
 import soundfile as sf
 import yaml
 
 from pathlib import Path
+
+try:
+  from tqdm import tqdm
+  _HAS_TQDM = True
+except ImportError:                                 # fall back to periodic ETA prints
+  _HAS_TQDM = False
 
 # perch wants 32 kHz, 5 s windows
 PERCH_WINDOW_S = 5.0
@@ -35,6 +42,10 @@ def parse_args():
   p.add_argument('--preset', default='perch_v2_cpu', help='perch_hoplite preset name')
   p.add_argument('--file-ext', default='.wav')
   p.add_argument('--limit', type=int, default=0, help='limit clips per split (0 = all, for smoke tests)')
+  # resumability for long (overnight) runs: flush shards periodically, skip
+  # already-embedded clips on restart, merge shards into the final <split>.npz.
+  p.add_argument('--shard-size', type=int, default=2000, help='flush a shard every N clips (crash-safety granularity)')
+  p.add_argument('--restart', action='store_true', help='ignore/clear existing shards and start the split fresh')
   return p.parse_args()
 
 
@@ -77,6 +88,80 @@ def discover_clips(split_dir, file_ext):
   return clips
 
 
+def embed_clip(model, x):
+  """Perch embedding for one clip, mean-pooled over frames/channels -> (features,)."""
+  out = model.embed(x)
+  emb = np.asarray(out.embeddings)                  # (frames, channels, features)
+  return emb.reshape(-1, emb.shape[-1]).mean(axis=0).astype(np.float32)
+
+
+def export_split(model, clips, split, out_dir, label_dict, label_names, target_sr, shard_size, restart):
+  """Resumable export of one split: embed clips, flush shards every `shard_size`,
+  skip clips already in shards on restart, then merge shards -> <split>.npz.
+
+  Crash-safety: at most `shard_size` clips of work is lost on a kill; rerun the
+  same command to resume. A bad clip is skipped (counted), never aborts the run.
+  """
+  final_path = out_dir / '{}.npz'.format(split)
+  parts_dir = out_dir / '{}_parts'.format(split)
+  if restart and parts_dir.exists():
+    for pf in parts_dir.glob('part_*.npz'): pf.unlink()
+  parts_dir.mkdir(parents=True, exist_ok=True)
+
+  # resume: collect stems already embedded in existing shards, skip them
+  existing = sorted(parts_dir.glob('part_*.npz'))
+  done = set()
+  for pf in existing:
+    done.update(str(s) for s in np.load(pf, allow_pickle=True)['stems'])
+  todo = [(ln, wp) for ln, wp in clips if wp.stem not in done]
+  print('\nExporting split [{}] - {} clips ({} already done, {} to do)'.format(
+      split, len(clips), len(done), len(todo)))
+
+  part_idx = len(existing)
+  buf_s, buf_e, buf_l = [], [], []
+
+  def flush():
+    nonlocal part_idx, buf_s, buf_e, buf_l
+    if not buf_s: return
+    np.savez_compressed(parts_dir / 'part_{:05d}.npz'.format(part_idx),
+                        stems=np.array(buf_s), embeddings=np.stack(buf_e).astype(np.float32),
+                        labels=np.array(buf_l, dtype=np.int64))
+    part_idx += 1; buf_s, buf_e, buf_l = [], [], []
+
+  t0, errors = time.time(), 0
+  loop = tqdm(todo, desc='[{}]'.format(split), unit='clip', smoothing=0.05) if _HAS_TQDM else todo
+  for i, (label_name, wav_path) in enumerate(loop):
+    try:
+      buf_e.append(embed_clip(model, load_clip(wav_path, target_sr)))
+    except Exception as ex:                              # skip a bad clip, keep going
+      errors += 1
+      if errors <= 5: print('  skip {} ({})'.format(wav_path.name, ex))
+      continue
+    buf_s.append(wav_path.stem); buf_l.append(label_dict[label_name])
+    if len(buf_s) >= shard_size: flush()
+    if _HAS_TQDM:
+      if errors: loop.set_postfix(err=errors, refresh=False)
+    elif (i + 1) % 200 == 0 or (i + 1) == len(todo):
+      rate = (i + 1) / max(1e-9, time.time() - t0)
+      print('  {}/{} | {:.1f} clips/s | ETA {:.0f} min | {} errors'.format(
+          i + 1, len(todo), rate, (len(todo) - (i + 1)) / max(1e-9, rate) / 60, errors))
+  flush()
+
+  # merge all shards -> the final consumer-facing single npz (atomic via .tmp)
+  parts = sorted(parts_dir.glob('part_*.npz'))
+  if not parts:
+    print('  no shards to merge for [{}]'.format(split)); return
+  S, E, L = [], [], []
+  for pf in parts:
+    d = np.load(pf, allow_pickle=True); S.append(d['stems']); E.append(d['embeddings']); L.append(d['labels'])
+  stems, embeddings, labels = np.concatenate(S), np.concatenate(E).astype(np.float32), np.concatenate(L)
+  tmp = final_path.with_name(final_path.name + '.tmp.npz')
+  np.savez_compressed(tmp, stems=stems, embeddings=embeddings, labels=labels, label_names=np.array(label_names))
+  tmp.replace(final_path)
+  print('  merged {} shards -> {} | embeddings {} | {} errors (delete {}/ to reclaim disk)'.format(
+      len(parts), final_path, embeddings.shape, errors, parts_dir.name))
+
+
 def main():
   args = parse_args()
 
@@ -104,33 +189,10 @@ def main():
   yaml.safe_dump({'label_dict': label_dict}, open(out_dir / 'label_dict.yaml', 'w'), sort_keys=False)
   print('Label dict ({} classes): {}'.format(len(label_dict), label_dict))
 
-  # export each split
+  # export each split (resumable: shards + skip-already-done + merge)
   for split, clips in split_clips.items():
-    print('\nExporting split [{}] - {} clips'.format(split, len(clips)))
-    stems, embeddings, labels = [], [], []
-
-    for i, (label_name, wav_path) in enumerate(clips):
-      x = load_clip(wav_path, target_sr)
-      out = model.embed(x)
-      emb = np.asarray(out.embeddings)            # (frames, channels, features)
-      emb = emb.reshape(-1, emb.shape[-1]).mean(axis=0)  # mean over frames/channels -> (features,)
-
-      stems.append(wav_path.stem)
-      embeddings.append(emb.astype(np.float32))
-      labels.append(label_dict[label_name])
-
-      if (i + 1) % 100 == 0 or (i + 1) == len(clips):
-        print('  {}/{}'.format(i + 1, len(clips)))
-
-    out_path = out_dir / '{}.npz'.format(split)
-    np.savez_compressed(
-      out_path,
-      stems=np.array(stems),
-      embeddings=np.stack(embeddings).astype(np.float32),
-      labels=np.array(labels, dtype=np.int64),
-      label_names=np.array(label_names),
-    )
-    print('  saved -> {} | embeddings {}'.format(out_path, np.stack(embeddings).shape))
+    export_split(model, clips, split, out_dir, label_dict, label_names, target_sr,
+                 args.shard_size, args.restart)
 
   print('\nDone. Embeddings written under: {}'.format(out_dir))
 

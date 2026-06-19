@@ -1,0 +1,24 @@
+# Dependencies for the extra-data pipeline (experiments/data/). Versions pinned
+# 2026-06 for reproducibility -- resampling (librosa) and Perch inference can
+# shift across versions, so the exact extra-sample set depends on these.
+#
+# Two environments are used (see REPRODUCIBILITY.md):
+#
+# --- .venv  (torch env): download / slice / sample / filter / teacher-improve ---
+xenocanto-api==0.3.1
+python-dotenv==1.2.2
+librosa==0.11.0
+soundfile==0.14.0
+numpy==2.4.6
+scipy==1.17.1
+scikit-learn==1.9.0
+torch==2.12.0
+tqdm==4.68.1
+#
+# --- .venv-perch  (Perch/TF env): export_embeddings.py only ---
+# kept separate (heavy TF/JAX stack); install in its own venv, do NOT mix:
+#   perch-hoplite==0.1.1
+#   tensorflow==2.21.0
+#   soundfile==0.14.0
+#   numpy==2.0.2
+#   tqdm==4.68.1

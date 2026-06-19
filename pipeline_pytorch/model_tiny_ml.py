@@ -54,6 +54,17 @@ class Baseline(ModelBase):
     x = self.classifier(x)
     return x
 
+  def forward_with_features(self, x):
+    """
+    forward that also returns the penultimate GAP descriptor (B, n_filters*4).
+    used only at train time for embedding/feature distillation (the hint head
+    is external to the model, so forward() and the exported graph are unchanged).
+    """
+    f = self.features(x)            # (B, C, 1, 1) after global avg pool
+    logits = self.classifier(f)     # classifier starts with Flatten
+    feat = torch.flatten(f, 1)      # (B, C) embedding for the hint loss
+    return logits, feat
+
 
 class BaselineGRU(ModelBase):
   """

@@ -40,6 +40,35 @@ def load_msab(msab_dir, split):
   return {str(s): msab[i] for i, s in enumerate(stems)}
 
 
+def load_teacher_embeddings(emb_dir, split, standardize=True):
+  """
+  load the Perch teacher's 1536-d embeddings for a split (exported by
+  experiments/perch/export_embeddings.py as <emb_dir>/<split>.npz) -> a
+  {stem: embedding (emb_dim,)} dict plus emb_dim. when standardize is set the
+  embeddings are z-scored with this split's own stats so the regression target
+  is well-scaled for the hint loss.
+  """
+
+  d = np.load(Path(emb_dir) / '{}.npz'.format(split), allow_pickle=True)
+  stems, emb = d['stems'], d['embeddings'].astype(np.float32)
+  if standardize:
+    mu, sd = emb.mean(0, keepdims=True), emb.std(0, keepdims=True) + 1e-6
+    emb = (emb - mu) / sd
+  return {str(s): emb[i] for i, s in enumerate(stems)}, int(emb.shape[1])
+
+
+def embedding_hint_loss(student_emb, teacher_emb, mse_weight=1.0, cos_weight=1.0):
+  """
+  feature-distillation hint: regress the student's projected embedding onto the
+  teacher's (standardized) embedding with MSE + (1 - cosine). richer per-clip
+  supervision than the 11-class logits alone.
+  """
+
+  mse = F.mse_loss(student_emb, teacher_emb)
+  cos = (1.0 - F.cosine_similarity(student_emb, teacher_emb, dim=1)).mean()
+  return mse_weight * mse + cos_weight * cos
+
+
 def _sid_to_array(datamodule, stem_to_array, what):
   """
   map each sample id to its per-clip array via the datamodule's sid->stem map;
@@ -83,7 +112,7 @@ class TeacherLogitDataset(torch.utils.data.Dataset):
   for each sample, looked up by stem via the datamodule's sid -> stem map
   """
 
-  def __init__(self, base_dataset, datamodule, stem_to_logits, num_classes, stem_to_ctx=None):
+  def __init__(self, base_dataset, datamodule, stem_to_logits, num_classes, stem_to_ctx=None, stem_to_emb=None):
 
     super().__init__()
     self.base = base_dataset
@@ -91,6 +120,8 @@ class TeacherLogitDataset(torch.utils.data.Dataset):
 
     # precompute sid -> teacher logits, fail loudly on any miss
     self.sid_to_logits = _sid_to_array(datamodule, stem_to_logits, 'TeacherLogitDataset')
+    # optional sid -> teacher embedding (for feature/embedding distillation)
+    self.sid_to_emb = _sid_to_array(datamodule, stem_to_emb, 'TeacherLogitDataset(emb)') if stem_to_emb is not None else None
     # optional sid -> MSAB context (for FiLM students, track C2)
     self.sid_to_ctx = _sid_to_array(datamodule, stem_to_ctx, 'TeacherLogitDataset(ctx)') if stem_to_ctx is not None else None
 
@@ -100,41 +131,54 @@ class TeacherLogitDataset(torch.utils.data.Dataset):
 
 
   def __getitem__(self, idx):
+    # tuple layout: (x, y, sid, t_logits, [t_emb], [ctx]) -- emb before ctx so a
+    # FiLM student's context stays at data[-1] regardless of embedding distill.
     x, y, sid = self.base[idx]
-    t_logits = torch.from_numpy(self.sid_to_logits[int(sid)]).float()
-    if self.sid_to_ctx is None:
-      return x, y, sid, t_logits
-    ctx = torch.from_numpy(self.sid_to_ctx[int(sid)]).float()
-    return x, y, sid, t_logits, ctx
+    out = [x, y, sid, torch.from_numpy(self.sid_to_logits[int(sid)]).float()]
+    if self.sid_to_emb is not None:
+      out.append(torch.from_numpy(self.sid_to_emb[int(sid)]).float())
+    if self.sid_to_ctx is not None:
+      out.append(torch.from_numpy(self.sid_to_ctx[int(sid)]).float())
+    return tuple(out)
 
 
-def mixup_with_teacher(x, y, t_logits, num_classes, alpha=0.2, p=0.5):
+def mixup_with_teacher(x, y, t_logits, num_classes, alpha=0.2, p=0.5, teacher_emb=None):
   """
   batch-level mixup applied jointly to inputs, one-hot hard targets and
-  teacher logits. returns (x, y_soft, t_logits) all mixed with the same
-  (lambda, permutation).
+  teacher logits (and, if given, the teacher embedding target) with the same
+  (lambda, permutation). returns (x, y_soft, t_logits[, teacher_emb]) -- the
+  embedding is appended only when teacher_emb is provided.
   """
 
   y_soft = F.one_hot(y.to(torch.int64), num_classes=num_classes).float()
 
   if alpha <= 0 or torch.rand(1).item() >= p:
-    return x, y_soft, t_logits
+    return (x, y_soft, t_logits) if teacher_emb is None else (x, y_soft, t_logits, teacher_emb)
 
   lam = float(np.random.beta(alpha, alpha))
   perm = torch.randperm(x.shape[0])
   x = lam * x + (1.0 - lam) * x[perm]
   y_soft = lam * y_soft + (1.0 - lam) * y_soft[perm]
   t_logits = lam * t_logits + (1.0 - lam) * t_logits[perm]
-  return x, y_soft, t_logits
+  if teacher_emb is None:
+    return x, y_soft, t_logits
+  teacher_emb = lam * teacher_emb + (1.0 - lam) * teacher_emb[perm]
+  return x, y_soft, t_logits, teacher_emb
 
 
-def distillation_loss(student_logits, teacher_logits, hard_soft_targets, alpha=0.5, temperature=3.0, label_smoothing=0.0):
+def distillation_loss(student_logits, teacher_logits, hard_soft_targets, alpha=0.5, temperature=3.0, label_smoothing=0.0,
+                      class_weights=None, logit_adjust=None):
   """
   combined loss: alpha * KD(KL, temperature) + (1 - alpha) * CE(hard).
 
-  - KD term: T^2 * KL( log_softmax(student/T) || softmax(teacher/T) )
+  - KD term: T^2 * KL( log_softmax(student/T) || softmax(teacher/T) ). always
+    matched against the raw teacher (no class balancing -- we trust the teacher).
   - CE term: cross-entropy against (possibly mixed) soft hard-label targets,
-    with optional label smoothing folded into those targets.
+    with optional label smoothing folded into those targets. for class
+    imbalance (macro-AUC cares about the rare bird classes):
+      * logit_adjust (C,): added to the student logits in the CE term only
+        (Menon et al. logit adjustment, tau*log(prior)); none at inference.
+      * class_weights (C,): per-class weight applied to the CE target mass.
   """
 
   T = temperature
@@ -148,7 +192,10 @@ def distillation_loss(student_logits, teacher_logits, hard_soft_targets, alpha=0
   if label_smoothing > 0:
     n = hard_soft_targets.shape[1]
     hard_soft_targets = hard_soft_targets * (1.0 - label_smoothing) + label_smoothing / n
-  ce = -(hard_soft_targets * F.log_softmax(student_logits, dim=1)).sum(dim=1).mean()
+  ce_logits = student_logits if logit_adjust is None else student_logits + logit_adjust
+  log_p = F.log_softmax(ce_logits, dim=1)
+  weighted = hard_soft_targets if class_weights is None else hard_soft_targets * class_weights
+  ce = -(weighted * log_p).sum(dim=1).mean()
 
   loss = alpha * kd + (1.0 - alpha) * ce
   return loss, {'kd': float(kd.detach()), 'ce': float(ce.detach())}

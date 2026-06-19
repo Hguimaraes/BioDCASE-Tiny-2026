@@ -21,7 +21,7 @@ from plots import plot_confusion_matrix
 from pipeline_pytorch.paths import MODELS_DIR, CM_FIG_PATH
 from pipeline_pytorch.pytorch_datamodule import DataloaderPytorch
 from pipeline_pytorch.augmentation import FeatureAugmentDataset, mixup_batch
-from pipeline_pytorch.distillation import TeacherLogitDataset, ContextDataset, load_teacher_logits, load_msab, mixup_with_teacher, distillation_loss
+from pipeline_pytorch.distillation import TeacherLogitDataset, ContextDataset, load_teacher_logits, load_msab, load_teacher_embeddings, mixup_with_teacher, distillation_loss, embedding_hint_loss
 from pipeline_pytorch.model_tiny_ml import Baseline
 
 
@@ -32,12 +32,69 @@ RECIPE_DEFAULTS = {
   'scheduler': {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05},
   'best_checkpoint_metric': 'val_auc',
   'early_stopping_patience': 0,
-  # logit distillation from the Perch teacher (track C1); disabled by default
+  # logit distillation from the Perch teacher (track C1); disabled by default.
+  # sub-block 'embed' adds feature/embedding distillation (regress the teacher's
+  # 1536-d embedding from the student's GAP descriptor; training-only head).
   'distillation': {'enabled': False, 'teacher_dir': '', 'alpha': 0.5, 'temperature': 3.0,
-                   'label_smoothing': 0.1, 'train_split': 'Train'},
+                   'label_smoothing': 0.1, 'train_split': 'Train',
+                   'embed': {'enabled': False, 'emb_dir': '', 'weight': 1.0,
+                             'mse_weight': 1.0, 'cos_weight': 1.0, 'standardize': True}},
   # MSAB context for FiLM students (track C2); used only if the model needs it
   'context': {'msab_dir': '', 'train_split': 'Train', 'eval_split': 'Validation'},
+  # weight EMA: eval + best-checkpoint on the averaged weights (deployed as-is)
+  'ema': {'enabled': False, 'decay': 0.999},
+  # class-imbalance handling on the CE term: none | logit_adjust | weighted
+  'class_balance': {'mode': 'none', 'tau': 1.0},
 }
+
+
+class WeightEMA:
+  """
+  exponential moving average of the model parameters. Baseline has no
+  BatchNorm, so averaging parameters (buffers are negligible) is sufficient.
+  eval + checkpointing run on the EMA weights, which are what we deploy.
+  """
+
+  def __init__(self, model, decay):
+    self.decay = decay
+    self.shadow = {k: p.detach().clone() for k, p in model.named_parameters()}
+
+  @torch.no_grad()
+  def update(self, model):
+    for k, p in model.named_parameters():
+      self.shadow[k].mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+  @torch.no_grad()
+  def swap_in(self, model):
+    """load EMA weights into the model, returning the live weights for restore."""
+    backup = {k: p.detach().clone() for k, p in model.named_parameters()}
+    for k, p in model.named_parameters():
+      p.data.copy_(self.shadow[k])
+    return backup
+
+  @torch.no_grad()
+  def swap_out(self, model, backup):
+    for k, p in model.named_parameters():
+      p.data.copy_(backup[k])
+
+
+def class_balance_tensors(mode, class_counts, num_classes, tau, device):
+  """
+  build (class_weights, logit_adjust) for the CE term from train class counts.
+  returns (None, None) when mode is 'none' or counts are unavailable.
+  """
+  if mode == 'none' or class_counts is None:
+    return None, None
+  counts = np.asarray(class_counts, dtype=np.float32)
+  if mode == 'weighted':
+    w = counts.sum() / (counts + 1e-6)
+    w = w / w.mean()                                   # mean-1 inverse frequency
+    return torch.tensor(w, dtype=torch.float32, device=device), None
+  if mode == 'logit_adjust':
+    prior = counts / counts.sum()
+    adj = tau * np.log(prior + 1e-12)                  # Menon et al. logit adjustment
+    return None, torch.tensor(adj, dtype=torch.float32, device=device)
+  raise ValueError('unknown class_balance mode: {}'.format(mode))
 
 
 def context_of(model, data):
@@ -111,7 +168,7 @@ def run_validation_epoch(model, dataloader_validation):
   return float(np.mean(losses)), acc, auc
 
 
-def run_model_training(cfg, model, dataloader_train, dataloader_validation, label_dict, run_logger=None):
+def run_model_training(cfg, model, dataloader_train, dataloader_validation, label_dict, run_logger=None, class_counts=None):
   """
   run model training
   """
@@ -121,9 +178,6 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
   num_epochs = cfg['model_training']['num_epochs']
   num_classes = len(label_dict)
 
-  # scheduler
-  scheduler = make_scheduler(recipe.get('scheduler', {}), model.optimizer, num_epochs)
-
   # mixup config
   cfg_mixup = recipe.get('mixup', {}) or {}
   mixup_alpha, mixup_p = cfg_mixup.get('alpha', 0.0), cfg_mixup.get('p', 0.0)
@@ -131,6 +185,36 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
   # distillation config
   cfg_distill = recipe.get('distillation', {}) or {}
   distill_on = cfg_distill.get('enabled', False)
+
+  # embedding (feature) distillation: a train-only linear head projecting the
+  # student's GAP descriptor onto the teacher embedding (carried at data[4]).
+  # the head lives outside the model, so forward()/the exported graph are intact.
+  cfg_embed = cfg_distill.get('embed', {}) or {}
+  embed_on = distill_on and cfg_embed.get('enabled', False)
+  embed_proj = None
+  if embed_on:
+    assert hasattr(model, 'forward_with_features'), 'embedding distillation needs model.forward_with_features'
+    sample = next(iter(dataloader_train))
+    emb_dim = sample[4].shape[1]
+    with torch.no_grad():
+      _, f0 = model.forward_with_features(sample[0][:1].to(device=model.device, dtype=torch.float32))
+    embed_proj = torch.nn.Linear(f0.shape[1], emb_dim).to(model.device)
+    model.optimizer.add_param_group({'params': embed_proj.parameters()})
+    print('Embedding distillation: head {} -> {} | weight {} (mse {}, cos {})'.format(
+        f0.shape[1], emb_dim, cfg_embed.get('weight', 1.0), cfg_embed.get('mse_weight', 1.0), cfg_embed.get('cos_weight', 1.0)))
+
+  # weight EMA (eval + best-checkpoint on the averaged weights)
+  cfg_ema = recipe.get('ema', {}) or {}
+  ema = WeightEMA(model, cfg_ema.get('decay', 0.999)) if cfg_ema.get('enabled', False) else None
+  if ema is not None: print('Weight EMA enabled (decay {})'.format(cfg_ema.get('decay', 0.999)))
+
+  # class-imbalance handling on the CE term
+  cfg_cb = recipe.get('class_balance', {}) or {}
+  class_weights, logit_adjust = class_balance_tensors(cfg_cb.get('mode', 'none'), class_counts, num_classes, cfg_cb.get('tau', 1.0), model.device)
+  if cfg_cb.get('mode', 'none') != 'none': print('Class balance: mode={} tau={}'.format(cfg_cb.get('mode'), cfg_cb.get('tau', 1.0)))
+
+  # scheduler (built after any extra optimizer param groups, e.g. the embed head)
+  scheduler = make_scheduler(recipe.get('scheduler', {}), model.optimizer, num_epochs)
 
   # best checkpoint tracking
   best_metric_name = recipe.get('best_checkpoint_metric', 'val_auc')
@@ -155,21 +239,32 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     for data in dataloader_train:
 
       if distill_on:
-        # data: (x, y, sid, teacher_logits[, ctx]) -> joint mixup, then KL+CE
-        # (ctx is the last element for FiLM students; mixup is off in the C2
-        #  recipe, so x and ctx stay aligned)
-        x, y_soft, t_logits = mixup_with_teacher(data[0], data[1], data[3], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
+        # data: (x, y, sid, teacher_logits[, teacher_emb][, ctx]) -> joint mixup,
+        # then KL+CE (+ optional embedding hint). ctx stays at data[-1] for FiLM
+        # students; mixup is off in those recipes, so x and ctx stay aligned.
+        if embed_on:
+          x, y_soft, t_logits, t_emb = mixup_with_teacher(data[0], data[1], data[3], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p, teacher_emb=data[4])
+          t_emb = t_emb.to(device=model.device, dtype=torch.float32)
+        else:
+          x, y_soft, t_logits = mixup_with_teacher(data[0], data[1], data[3], num_classes=num_classes, alpha=mixup_alpha, p=mixup_p)
         x = x.to(device=model.device, dtype=torch.float32)
         y_soft = y_soft.to(device=model.device)
         t_logits = t_logits.to(device=model.device)
         ctx = context_of(model, data)
 
         model.optimizer.zero_grad()
-        student_logits = forward_with_ctx(model, x, ctx)
+        if embed_on:
+          student_logits, feat = model.forward_with_features(x)
+        else:
+          student_logits = forward_with_ctx(model, x, ctx)
         loss_t, _ = distillation_loss(student_logits, t_logits, y_soft,
                                       alpha=cfg_distill.get('alpha', 0.5),
                                       temperature=cfg_distill.get('temperature', 3.0),
-                                      label_smoothing=cfg_distill.get('label_smoothing', 0.0))
+                                      label_smoothing=cfg_distill.get('label_smoothing', 0.0),
+                                      class_weights=class_weights, logit_adjust=logit_adjust)
+        if embed_on:
+          loss_t = loss_t + cfg_embed.get('weight', 1.0) * embedding_hint_loss(
+              embed_proj(feat), t_emb, mse_weight=cfg_embed.get('mse_weight', 1.0), cos_weight=cfg_embed.get('cos_weight', 1.0))
         loss_t.backward()
         model.optimizer.step()
         loss = float(loss_t.detach())
@@ -181,6 +276,9 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
         # training step
         loss = model.train_step((x, y_soft))
 
+      # weight EMA update (after the optimizer step in either branch)
+      if ema is not None: ema.update(model)
+
       # loss update
       epoch_train_loss.append(loss)
 
@@ -188,8 +286,9 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     current_lr = model.optimizer.param_groups[0]['lr']
     if scheduler is not None: scheduler.step()
 
-    # evaluation mode
+    # evaluation mode (validation + checkpoint run on the EMA weights when on)
     model.set_model_to_evaluation_mode()
+    ema_backup = ema.swap_in(model) if ema is not None else None
 
     # validation metrics
     val_loss, val_acc, val_auc = run_validation_epoch(model, dataloader_validation)
@@ -201,11 +300,14 @@ def run_model_training(cfg, model, dataloader_train, dataloader_validation, labe
     # run logging
     if run_logger is not None: run_logger.log_epoch(epoch + 1, lr=current_lr, train_loss=float(np.mean(epoch_train_loss)), val_loss=val_loss, val_acc=val_acc, val_auc=val_auc)
 
-    # best checkpoint tracking
+    # best checkpoint tracking (stores the EMA weights when EMA is on)
     epoch_metric = {'val_auc': val_auc, 'val_acc': val_acc, 'val_loss': -val_loss}[best_metric_name]
     if not np.isnan(epoch_metric) and epoch_metric > best_metric:
       best_metric, best_epoch = epoch_metric, epoch + 1
       best_state = copy.deepcopy(model.state_dict())
+
+    # restore the live (non-EMA) weights so training continues from them
+    if ema is not None: ema.swap_out(model, ema_backup)
 
     # early stopping
     if patience and (epoch + 1 - best_epoch) >= patience:
@@ -318,11 +420,19 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
   # train dataset with dynamic augmentation (train split only)
   dataset_train = FeatureAugmentDataset(DataloaderPytorch(datamodule_train), cfg=recipe.get('augmentation', {}))
 
-  # attach teacher logits for distillation (track C1) + optional MSAB ctx (C2)
+  # attach teacher logits for distillation (track C1) + optional teacher
+  # embeddings (feature distillation) + optional MSAB ctx (C2)
   cfg_distill = recipe.get('distillation', {}) or {}
   if cfg_distill.get('enabled', False):
     stem_to_logits = load_teacher_logits(cfg_distill['teacher_dir'], cfg_distill.get('train_split', 'Train'))
-    dataset_train = TeacherLogitDataset(dataset_train, datamodule_train, stem_to_logits, num_classes, stem_to_ctx=ctx_train)
+    cfg_embed = cfg_distill.get('embed', {}) or {}
+    stem_to_emb = None
+    if cfg_embed.get('enabled', False):
+      # default emb dir = the perch_v2_cpu dir holding <split>.npz (teacher_dir's parent)
+      emb_dir = cfg_embed.get('emb_dir') or str(Path(cfg_distill['teacher_dir']).parent)
+      stem_to_emb, emb_dim = load_teacher_embeddings(emb_dir, cfg_distill.get('train_split', 'Train'), standardize=cfg_embed.get('standardize', True))
+      print('Embedding distillation enabled - teacher embeddings from: {} (dim {})'.format(emb_dir, emb_dim))
+    dataset_train = TeacherLogitDataset(dataset_train, datamodule_train, stem_to_logits, num_classes, stem_to_ctx=ctx_train, stem_to_emb=stem_to_emb)
     print('Distillation enabled - teacher logits from: {} ({} train samples aligned)'.format(cfg_distill['teacher_dir'], len(dataset_train)))
   elif needs_context:
     dataset_train = ContextDataset(dataset_train, datamodule_train, ctx_train)
@@ -350,8 +460,11 @@ def pytorch_model_taining(cfg_framework, datamodule_train, datamodule_validation
       feature_shape=list(input_shape), num_classes=len(datamodule_train.get_label_dict()))
     run_logger.log_model_info(model_name=model.get_model_name(), params=int(model.count_params()), macs=int(model.count_operations()))
 
+  # class counts (for optional class-imbalance handling on the CE term)
+  class_counts = np.bincount(np.asarray(datamodule_train.get_targets()).astype(int), minlength=num_classes)
+
   # run model training
-  run_model_training(cfg_framework, model, dataloader_train, dataloader_validation, label_dict=datamodule_train.get_label_dict(), run_logger=run_logger)
+  run_model_training(cfg_framework, model, dataloader_train, dataloader_validation, label_dict=datamodule_train.get_label_dict(), run_logger=run_logger, class_counts=class_counts)
 
   # run model testing
   run_model_testing(cfg_framework, model, dataloader_test, label_dict=datamodule_test.get_label_dict(), run_logger=run_logger)

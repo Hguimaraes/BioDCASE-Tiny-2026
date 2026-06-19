@@ -4,7 +4,13 @@
 # ignore directory
 ignore/
 output/
-data/
+# local virtualenvs (large, regenerable)
+.venv-perch/
+.venv/
+# reference papers (external PDFs, not source)
+papers/
+# root-anchored so it ignores repo-root data/ ONLY, not experiments/data/ (pipeline code)
+/data/
 submission/reports
 submission/your_generated_code/src
 submission/example_submission_packages
@@ -24,6 +30,13 @@ biodcase_tiny/feature_extraction/FilterbankConfig.py
 
 # for MacOS
 .DS_Store
+
+# secrets / local environment - NEVER commit real keys (e.g. XENO_CANTO_API_KEY).
+# the committed template is .env.example; real values live in .env (ignored).
+.env
+.env.*
+!.env.example
+
 # perch raw embeddings (large, regenerable via experiments/perch/export_embeddings.py)
 experiments/perch/embeddings/**/Train.npz
 experiments/perch/embeddings/**/Validation.npz
