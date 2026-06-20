@@ -39,8 +39,8 @@ from pipeline_pytorch.paths import MODELS_DIR
 CACHE = ROOT / 'output' / '02_features' / 'cache_pcen'
 EXTRA_CACHE = ROOT / 'output' / '02_features' / 'cache_pcen_extra'
 TEACHER = ROOT / 'experiments' / 'perch' / 'embeddings' / 'perch_v2_cpu'
-XC = Path('/home/hguimaraes/datasets/extra/xc')
-BG = Path('/home/hguimaraes/datasets/extra/background')
+XC_DEFAULT = '/home/hguimaraes/datasets/extra/xc'
+BG_DEFAULT = '/home/hguimaraes/datasets/extra/background'
 
 
 def build_index(sources):
@@ -107,6 +107,10 @@ def main():
   ap.add_argument('--epochs', type=int, default=60)
   ap.add_argument('--batch', type=int, default=64)
   ap.add_argument('--num-workers', type=int, default=4, help='DataLoader workers for lazy feature IO')
+  ap.add_argument('--xc', type=Path, default=XC_DEFAULT, help='Xeno-canto extra-data root (predictions.npz + embeddings/perch_v2_cpu/clips.npz)')
+  ap.add_argument('--bg', type=Path, default=BG_DEFAULT, help='background extra-data root (predictions.npz + embeddings/perch_v2_cpu/clips.npz)')
+  ap.add_argument('--lr', type=float, default=1e-3, help='base (peak) learning rate')
+  ap.add_argument('--min-lr', type=float, default=1e-4, help='cosine floor LR at the final epoch')
   ap.add_argument('--seed', type=int, default=1)
   args = ap.parse_args()
   torch.manual_seed(args.seed); np.random.seed(args.seed)
@@ -118,13 +122,13 @@ def main():
   # teacher source files (read lazily: only `stems` now, big arrays later, once each)
   EMB_SOURCES = [
       TEACHER / 'Train.npz',
-      XC / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
-      BG / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
+      args.xc / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
+      args.bg / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
   ]
   LOGIT_SOURCES = [
       TEACHER / 'teacher_mlp' / 'soft_logits_Train.npz',
-      XC / 'predictions.npz',
-      BG / 'predictions.npz',
+      args.xc / 'predictions.npz',
+      args.bg / 'predictions.npz',
   ]
   emb_idx = build_index(EMB_SOURCES)
   logit_idx = build_index(LOGIT_SOURCES)
@@ -159,12 +163,14 @@ def main():
   model = Baseline(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
                    device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
                    criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
-                   optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
+                   optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': args.lr, 'betas': [0.9, 0.999]}},
                    verbose=False)
 
+  # scheduler floor is expressed as a fraction of the base LR (min_lr_factor)
+  min_lr_factor = min(args.min_lr / args.lr, 1.0)
   cfg = {'model_training': {'num_epochs': args.epochs}, 'training_recipe': {
     'augmentation': {'enabled': False}, 'mixup': {'alpha': 0.0, 'p': 0.0},
-    'scheduler': {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05},
+    'scheduler': {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': min_lr_factor},
     'best_checkpoint_metric': 'val_auc', 'early_stopping_patience': 0,
     'distillation': {'enabled': True, 'alpha': 0.5, 'temperature': 3.0, 'label_smoothing': 0.1,
                      'embed': {'enabled': True, 'weight': 1.0, 'mse_weight': 1.0, 'cos_weight': 1.0}},
