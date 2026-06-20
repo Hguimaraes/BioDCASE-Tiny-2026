@@ -2,6 +2,7 @@
 # model tiny ml
 
 import sys
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -106,6 +107,114 @@ class ConformerStudent(ModelBase):
     print("\n*** ConformerStudent: tflite export deferred (attention/conv in graph). "
           "float .pth metrics are logged.")
     return
+
+
+class GaborTemporalConv(nn.Module):
+  """Depthwise 1-D modulation filterbank over time: each of `channels` feature
+  channels is filtered by `n_mod` Gabor band-passes initialized at modulation
+  rates f_min..f_max Hz -> channels*n_mod modulation maps. It's a grouped Conv1d
+  (Gabor-initialized but learnable; freeze with learnable=False), so it exports to
+  tflite -- the deployable stand-in for an FFT along the feature-map time axis."""
+  def __init__(self, channels, n_mod=8, kernel=33, fs_mod=46.875, f_min=1.0, f_max=20.0, learnable=True):
+    super().__init__()
+    self.conv = nn.Conv1d(channels, channels * n_mod, kernel, padding=kernel // 2, groups=channels, bias=False)
+    t = torch.arange(kernel).float() - kernel // 2
+    sigma = kernel / 6.0
+    win = torch.exp(-t ** 2 / (2 * sigma ** 2))
+    bank = torch.stack([win * torch.cos(2 * math.pi * (f / fs_mod) * t)        # (n_mod, kernel)
+                        for f in torch.linspace(f_min, f_max, n_mod)])
+    bank = bank - bank.mean(dim=1, keepdim=True)                               # zero-DC band-pass
+    bank = bank / (bank.norm(dim=1, keepdim=True) + 1e-8)
+    with torch.no_grad():
+      self.conv.weight.copy_(bank.repeat(channels, 1).unsqueeze(1))            # (channels*n_mod, 1, kernel)
+    self.conv.weight.requires_grad_(learnable)
+
+  def forward(self, x):                                                        # (B, C, T) -> (B, C*n_mod, T)
+    return self.conv(x)
+
+
+class GaborSTRFConv(nn.Module):
+  """First conv as a 2-D Gabor spectro-temporal modulation filterbank (auditory
+  STRF, Chi-Ru-Shamma): out_ch filters over a grid of (spectral scale, temporal
+  rate). Gabor-initialized, learnable. A plain Conv2d, so fully deployable."""
+  def __init__(self, out_ch=32, kf=9, kt=9, learnable=True):
+    super().__init__()
+    self.conv = nn.Conv2d(1, out_ch, (kf, kt), padding=(kf // 2, kt // 2), bias=False)
+    fa = torch.arange(kf).float() - kf // 2; ta = torch.arange(kt).float() - kt // 2
+    F2, T2 = torch.meshgrid(fa, ta, indexing='ij')
+    win = torch.exp(-(F2 ** 2 + T2 ** 2) / (2 * (kf / 4.0) ** 2))
+    g = int(out_ch ** 0.5) + 1; rn = (out_ch + g - 1) // g
+    ker = [win * torch.cos(2 * math.pi * (s * F2 + r * T2))
+           for s in torch.linspace(0.1, 0.5, g) for r in torch.linspace(0.1, 0.5, rn)][:out_ch]
+    ker = torch.stack(ker)
+    ker = ker - ker.mean(dim=(1, 2), keepdim=True)
+    ker = ker / (ker.flatten(1).norm(dim=1)[:, None, None] + 1e-8)
+    with torch.no_grad():
+      self.conv.weight.copy_(ker.unsqueeze(1))
+    self.conv.weight.requires_grad_(learnable)
+
+  def forward(self, x):
+    return self.conv(x)
+
+
+class AttnPool1d(nn.Module):
+  """Additive attention pooling over time (replaces global avg-pool):
+  a_t = softmax(v . tanh(W h_t)); out = sum_t a_t h_t. Deployable."""
+  def __init__(self, dim, attn_dim=64):
+    super().__init__()
+    self.W = nn.Linear(dim, attn_dim); self.v = nn.Linear(attn_dim, 1)
+  def forward(self, h):                                                        # (B, dim, T)
+    h = h.transpose(1, 2)                                                      # (B, T, dim)
+    a = torch.softmax(self.v(torch.tanh(self.W(h))), dim=1)                    # (B, T, 1)
+    return (a * h).sum(dim=1)                                                  # (B, dim)
+
+
+class ModFilterNet(ModelBase):
+  """Signal-processing-inductive-bias student: conv stem that pools FREQUENCY only
+  (time preserved) -> learnable Gabor temporal modulation filterbank -> attention
+  pooling over time -> classifier. Optional 2-D Gabor STRF front conv (cfg strf).
+  All standard conv/linear/softmax (no FFT), so it stays deployable. The attention-
+  pooled descriptor is the representation the embedding-distill lever regresses on.
+  cfg: n_filters (32), n_mod (8), mod_kernel (33, odd), strf (False),
+  learnable_mod (True), attn_dim (64), fs_mod (46.875), dropout (0.05)."""
+
+  def define_network_structure(self):
+    nf = self.cfg.get('n_filters', 32); n_mod = self.cfg.get('n_mod', 8)
+    learn = self.cfg.get('learnable_mod', True)
+    front = GaborSTRFConv(nf, learnable=learn) if self.cfg.get('strf', False) else nn.Conv2d(1, nf, 3, padding=1)
+    self.stem = nn.Sequential(                                                 # pool FREQ only, keep time
+        front, nn.ReLU(), nn.MaxPool2d((2, 1)),
+        nn.Conv2d(nf, nf * 2, 3, padding=1), nn.ReLU(), nn.MaxPool2d((2, 1)),
+        nn.Conv2d(nf * 2, nf * 2, 3, padding=1), nn.ReLU(),
+        nn.AdaptiveAvgPool2d((1, None)))                                       # (B, 2nf, 1, T)
+    ch = nf * 2
+    self.modfb = GaborTemporalConv(ch, n_mod=n_mod, kernel=self.cfg.get('mod_kernel', 33),
+                                   fs_mod=self.cfg.get('fs_mod', 46.875), learnable=learn)
+    self.modbn = nn.BatchNorm1d(ch * n_mod)
+    self.gap_dim = ch * n_mod
+    self.pool = AttnPool1d(self.gap_dim, attn_dim=self.cfg.get('attn_dim', 64))
+    self.classifier = nn.Sequential(nn.Dropout(self.cfg.get('dropout', 0.05)),
+                                    nn.Linear(self.gap_dim, 32), nn.ReLU(),
+                                    nn.Linear(32, self.cfg['num_classes']))
+
+  def _features(self, x):
+    z = self.stem(x).squeeze(2)                                               # (B, ch, T)
+    z = torch.relu(self.modbn(self.modfb(z)))                                 # (B, ch*n_mod, T) modulation maps
+    return self.pool(z)                                                       # (B, ch*n_mod) attention-pooled
+
+  def forward(self, x):
+    return self.classifier(self._features(x))
+
+  def forward_with_features(self, x):
+    f = self._features(x)
+    return self.classifier(f), f                                             # embed distill regresses f
+
+  def save_model_to_tflite(self):
+    try:
+      return super().save_model_to_tflite()                                  # designed to be deployable; attempt it
+    except Exception as e:
+      print("\n*** ModFilterNet: tflite export deferred ({}). float .pth metrics are logged.".format(type(e).__name__))
+      return
 
 
 class BaselineGRU(ModelBase):
