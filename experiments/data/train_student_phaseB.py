@@ -103,7 +103,8 @@ def gather(split_glob, classes_idx, have, cap=0, seed=42, is_extra=False):
 
 def main():
   ap = argparse.ArgumentParser()
-  ap.add_argument('--extra-per-class', type=int, default=3000, help='cap extra clips per class (0 = all)')
+  ap.add_argument('--extra-per-class', type=int, default=3000,
+                  help='extra clips per class: 0 = none (original-only D2 repro), <0 = all (uncapped), N>0 = cap N/class')
   ap.add_argument('--epochs', type=int, default=60)
   ap.add_argument('--batch', type=int, default=64)
   ap.add_argument('--num-workers', type=int, default=4, help='DataLoader workers for lazy feature IO')
@@ -119,27 +120,32 @@ def main():
   ck = torch.load(TEACHER / 'teacher_mlp' / 'teacher_head.pt', map_location='cpu', weights_only=False)
   classes = [str(n) for n in ck['label_names']]; cidx = {c: i for i, c in enumerate(classes)}; n_cls = len(classes)
 
-  # teacher source files (read lazily: only `stems` now, big arrays later, once each)
-  EMB_SOURCES = [
-      TEACHER / 'Train.npz',
-      args.xc / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
-      args.bg / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
-  ]
-  LOGIT_SOURCES = [
-      TEACHER / 'teacher_mlp' / 'soft_logits_Train.npz',
-      args.xc / 'predictions.npz',
-      args.bg / 'predictions.npz',
-  ]
+  # teacher source files (read lazily: only `stems` now, big arrays later, once each).
+  # extra (XC/BG) sources are added ONLY when extra data is requested, so 0 = none
+  # is a clean original-only D2 reproduction that doesn't even touch the XC/BG files.
+  use_extra = args.extra_per_class != 0
+  EMB_SOURCES = [TEACHER / 'Train.npz']
+  LOGIT_SOURCES = [TEACHER / 'teacher_mlp' / 'soft_logits_Train.npz']
+  if use_extra:
+    EMB_SOURCES += [args.xc / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
+                    args.bg / 'embeddings' / 'perch_v2_cpu' / 'clips.npz']
+    LOGIT_SOURCES += [args.xc / 'predictions.npz', args.bg / 'predictions.npz']
   emb_idx = build_index(EMB_SOURCES)
   logit_idx = build_index(LOGIT_SOURCES)
   have = lambda s: s in emb_idx and s in logit_idx
 
-  # train items: all original + capped extra (cap applied BEFORE loading tensors)
+  # train items: all original + extra (cap applied BEFORE loading tensors).
+  # extra_per_class: 0 -> none; <0 -> all (cap 0 disables capping); N>0 -> cap N/class
   orig = gather(str(CACHE / 'Train' / '*' / '*.npz'), cidx, have)
-  extra = gather(str(EXTRA_CACHE / '*' / '*.npz'), cidx, have, cap=args.extra_per_class, seed=args.seed, is_extra=True)
+  if use_extra:
+    cap = args.extra_per_class if args.extra_per_class > 0 else 0
+    extra = gather(str(EXTRA_CACHE / '*' / '*.npz'), cidx, have, cap=cap, seed=args.seed, is_extra=True)
+  else:
+    extra = []
   items = orig + extra
-  print('train: {} original + {} extra = {} (cap {}/class) | classes {}'.format(
-      len(orig), len(extra), len(items), args.extra_per_class or 'all', n_cls))
+  cap_label = 'none' if args.extra_per_class == 0 else ('all' if args.extra_per_class < 0 else args.extra_per_class)
+  print('train: {} original + {} extra = {} (extra/class {}) | classes {}'.format(
+      len(orig), len(extra), len(items), cap_label, n_cls))
 
   # pull only the teacher rows we actually train on
   stems = [s for _, _, s in items]
