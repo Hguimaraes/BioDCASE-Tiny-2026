@@ -14,13 +14,18 @@
 #   .venv/bin/python experiments/data/train_student_phaseB.py \
 #       --extra-per-class 3000 --epochs 60
 #
-# NOTE: training a conv net on tens of thousands of clips is heavy on CPU; use
-# --extra-per-class to bound it, or run on a GPU node. Eval is the ORIGINAL val.
+# MEMORY: the teacher .npz files are deflate-compressed (so they can't be mmap'd,
+# and every NpzFile read fully decompresses). To stay light we (1) read only the
+# small `stems` arrays to decide which clips to keep, (2) apply --extra-per-class
+# BEFORE pulling any embeddings, then decompress each big array exactly once and
+# keep only the rows we train on, and (3) load feature npz lazily per sample
+# instead of pre-stacking one giant array. Eval is the ORIGINAL val.
 
 import sys
 import glob
 import argparse
 from pathlib import Path
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -29,7 +34,6 @@ ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 from pipeline_pytorch.model_tiny_ml import Baseline
 from pipeline_pytorch.model_training import run_model_training, run_validation_epoch
-from pipeline_pytorch.distillation import load_teacher_logits
 from pipeline_pytorch.paths import MODELS_DIR
 
 CACHE = ROOT / 'output' / '02_features' / 'cache_pcen'
@@ -39,35 +43,54 @@ XC = Path('/home/hguimaraes/datasets/extra/xc')
 BG = Path('/home/hguimaraes/datasets/extra/background')
 
 
-def logits_from_pred(npz):
-  d = np.load(npz, allow_pickle=True)
-  return {str(s): d['logits'][i] for i, s in enumerate(d['stems'])}
+def build_index(sources):
+  """stem -> (source_idx, row). Reads ONLY the small `stems` array from each npz,
+  so we can decide membership without decompressing the big embedding/logit array."""
+  idx = {}
+  for si, p in enumerate(sources):
+    for r, s in enumerate(np.load(p)['stems']):
+      idx[str(s)] = (si, r)
+  return idx
 
 
-def emb_from_npz(npz):
-  d = np.load(npz, allow_pickle=True)
-  return {str(s): d['embeddings'][i].astype(np.float32) for i, s in enumerate(d['stems'])}
+def gather_rows(sources, idx, stems, key, dim):
+  """Build (len(stems), dim) by pulling only the needed rows. Each big source array
+  is decompressed exactly once, fancy-indexed for its rows, then freed."""
+  out = np.empty((len(stems), dim), np.float32)
+  by_src = defaultdict(list)
+  for di, s in enumerate(stems):
+    si, r = idx[s]
+    by_src[si].append((di, r))
+  for si, pairs in by_src.items():
+    arr = np.load(sources[si])[key]                       # single decompress
+    dst = np.fromiter((d for d, _ in pairs), int, len(pairs))
+    src = np.fromiter((r for _, r in pairs), int, len(pairs))
+    out[dst] = np.asarray(arr[src], np.float32)
+    del arr
+  return out
 
 
-class TupleDS(torch.utils.data.Dataset):
-  """yields (x, y, sid[, t_logits, t_emb]); with teacher -> matches the D2 embed path."""
-  def __init__(self, X, y, Tlog=None, Temb=None):
-    self.X, self.y, self.Tlog, self.Temb = X, y, Tlog, Temb
+class LazyDS(torch.utils.data.Dataset):
+  """Loads each feature npz on access (no giant pre-stacked array). With teacher
+  tensors -> yields the D2 embed tuple; without -> (x, y, sid)."""
+  def __init__(self, paths, y, Tlog=None, Temb=None):
+    self.paths, self.y, self.Tlog, self.Temb = paths, y, Tlog, Temb
   def __len__(self): return len(self.y)
   def __getitem__(self, i):
-    x = torch.from_numpy(self.X[i]); yy = torch.tensor(int(self.y[i])); sid = torch.tensor(i)
+    x = torch.from_numpy(np.load(self.paths[i])['x'].reshape(1, 40, 133).astype(np.float32))
+    yy = torch.tensor(int(self.y[i])); sid = torch.tensor(i)
     if self.Tlog is None:
       return x, yy, sid
     return x, yy, sid, torch.from_numpy(self.Tlog[i]), torch.from_numpy(self.Temb[i])
 
 
-def gather(split_glob, classes_idx, logit_d, emb_d, cap=0, seed=42, is_extra=False):
+def gather(split_glob, classes_idx, have, cap=0, seed=42, is_extra=False):
   """collect (npz_path, class_idx, stem) that have teacher logits+emb; cap extra per class."""
   rng = np.random.default_rng(seed)
   by_cls = {}
   for f in sorted(Path(p) for p in glob.glob(split_glob)):
     cls = f.parent.name
-    if cls not in classes_idx or f.stem not in logit_d or f.stem not in emb_d:
+    if cls not in classes_idx or not have(f.stem):
       continue
     by_cls.setdefault(cls, []).append(f)
   items = []
@@ -83,6 +106,7 @@ def main():
   ap.add_argument('--extra-per-class', type=int, default=3000, help='cap extra clips per class (0 = all)')
   ap.add_argument('--epochs', type=int, default=60)
   ap.add_argument('--batch', type=int, default=64)
+  ap.add_argument('--num-workers', type=int, default=4, help='DataLoader workers for lazy feature IO')
   ap.add_argument('--seed', type=int, default=1)
   args = ap.parse_args()
   torch.manual_seed(args.seed); np.random.seed(args.seed)
@@ -91,39 +115,46 @@ def main():
   ck = torch.load(TEACHER / 'teacher_mlp' / 'teacher_head.pt', map_location='cpu', weights_only=False)
   classes = [str(n) for n in ck['label_names']]; cidx = {c: i for i, c in enumerate(classes)}; n_cls = len(classes)
 
-  # teacher logits + embeddings by stem (original + extra)
-  logit_d = load_teacher_logits(str(TEACHER / 'teacher_mlp'), 'Train')
-  logit_d.update(logits_from_pred(XC / 'predictions.npz'))
-  logit_d.update(logits_from_pred(BG / 'predictions.npz'))
-  emb_d = emb_from_npz(TEACHER / 'Train.npz')
-  emb_d.update(emb_from_npz(XC / 'embeddings' / 'perch_v2_cpu' / 'clips.npz'))
-  emb_d.update(emb_from_npz(BG / 'embeddings' / 'perch_v2_cpu' / 'clips.npz'))
+  # teacher source files (read lazily: only `stems` now, big arrays later, once each)
+  EMB_SOURCES = [
+      TEACHER / 'Train.npz',
+      XC / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
+      BG / 'embeddings' / 'perch_v2_cpu' / 'clips.npz',
+  ]
+  LOGIT_SOURCES = [
+      TEACHER / 'teacher_mlp' / 'soft_logits_Train.npz',
+      XC / 'predictions.npz',
+      BG / 'predictions.npz',
+  ]
+  emb_idx = build_index(EMB_SOURCES)
+  logit_idx = build_index(LOGIT_SOURCES)
+  have = lambda s: s in emb_idx and s in logit_idx
 
-  # train items: all original + capped extra (extra restricted to kept manifest via cache existing)
-  orig = gather(str(CACHE / 'Train' / '*' / '*.npz'), cidx, logit_d, emb_d)
-  extra = gather(str(EXTRA_CACHE / '*' / '*.npz'), cidx, logit_d, emb_d, cap=args.extra_per_class, seed=args.seed, is_extra=True)
+  # train items: all original + capped extra (cap applied BEFORE loading tensors)
+  orig = gather(str(CACHE / 'Train' / '*' / '*.npz'), cidx, have)
+  extra = gather(str(EXTRA_CACHE / '*' / '*.npz'), cidx, have, cap=args.extra_per_class, seed=args.seed, is_extra=True)
   items = orig + extra
   print('train: {} original + {} extra = {} (cap {}/class) | classes {}'.format(
       len(orig), len(extra), len(items), args.extra_per_class or 'all', n_cls))
 
-  # materialize arrays
-  N = len(items)
-  X = np.empty((N, 1, 40, 133), np.float32); y = np.empty(N, np.int64)
-  Tlog = np.empty((N, n_cls), np.float32); Temb = np.empty((N, 1536), np.float32)
-  for i, (f, ci, stem) in enumerate(items):
-    X[i] = np.load(f)['x'].reshape(1, 40, 133); y[i] = ci
-    Tlog[i] = logit_d[stem]; Temb[i] = emb_d[stem]
+  # pull only the teacher rows we actually train on
+  stems = [s for _, _, s in items]
+  paths = [str(f) for f, _, _ in items]
+  y = np.array([ci for _, ci, _ in items], np.int64)
+  Tlog = gather_rows(LOGIT_SOURCES, logit_idx, stems, 'logits', n_cls)
+  Temb = gather_rows(EMB_SOURCES, emb_idx, stems, 'embeddings', 1536)
   mu, sd = Temb.mean(0, keepdims=True), Temb.std(0, keepdims=True) + 1e-6   # standardize emb (as D2)
   Temb = (Temb - mu) / sd
 
-  # validation (original soundscape val; no teacher needed)
-  vitems = [(f, cidx[f.parent.name]) for f in sorted((CACHE / 'Validation').glob('*/*.npz')) if f.parent.name in cidx]
-  Xv = np.stack([np.load(f)['x'].reshape(1, 40, 133) for f, _ in vitems]).astype(np.float32)
-  yv = np.array([c for _, c in vitems], np.int64)
+  # validation (original soundscape val; no teacher needed; loaded lazily too)
+  vitems = [(str(f), cidx[f.parent.name]) for f in sorted((CACHE / 'Validation').glob('*/*.npz')) if f.parent.name in cidx]
+  vpaths = [p for p, _ in vitems]; yv = np.array([c for _, c in vitems], np.int64)
   print('val: {}'.format(len(yv)))
 
-  dl_tr = torch.utils.data.DataLoader(TupleDS(X, y, Tlog, Temb), batch_size=args.batch, shuffle=True)
-  dl_va = torch.utils.data.DataLoader(TupleDS(Xv, yv), batch_size=128, shuffle=False)
+  dl_tr = torch.utils.data.DataLoader(LazyDS(paths, y, Tlog, Temb), batch_size=args.batch,
+                                      shuffle=True, num_workers=args.num_workers)
+  dl_va = torch.utils.data.DataLoader(LazyDS(vpaths, yv), batch_size=128,
+                                      shuffle=False, num_workers=args.num_workers)
 
   model = Baseline(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
                    device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
