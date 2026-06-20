@@ -66,6 +66,48 @@ class Baseline(ModelBase):
     return logits, feat
 
 
+class ConformerStudent(ModelBase):
+  """Small Conformer student (torchaudio) over the PCEN map: the 40 mel bins are
+  projected to d_model and the 133 frames form the sequence. The time-pooled
+  d_model descriptor is the representation the embedding-distillation lever
+  regresses onto Perch. Single-input drop-in for run_model_training.
+  cfg: d_model (64), num_layers (4), num_heads (4), ffn_dim (128),
+  conv_kernel (15, odd), dropout (0.1)."""
+
+  def define_network_structure(self):
+    from torchaudio.models import Conformer                  # lazy: keep module importable w/o torchaudio
+    _, mel, _ = self.cfg['input_shape']                      # (1, 40, 133)
+    d = self.cfg.get('d_model', 64)
+    self.in_proj = nn.Linear(mel, d)
+    self.conformer = Conformer(input_dim=d,
+                               num_heads=self.cfg.get('num_heads', 4),
+                               ffn_dim=self.cfg.get('ffn_dim', 128),
+                               num_layers=self.cfg.get('num_layers', 4),
+                               depthwise_conv_kernel_size=self.cfg.get('conv_kernel', 15),
+                               dropout=self.cfg.get('dropout', 0.1))
+    self.gap_dim = d
+    self.classifier = nn.Sequential(nn.Linear(d, 32), nn.ReLU(), nn.Linear(32, self.cfg['num_classes']))
+
+  def _features(self, x):
+    z = x[:, 0].transpose(1, 2)                              # (B, 1, 40, 133) -> (B, 133, 40)
+    z = self.in_proj(z)                                      # (B, 133, d)
+    lengths = torch.full((z.shape[0],), z.shape[1], device=z.device, dtype=torch.long)
+    z, _ = self.conformer(z, lengths)                        # (B, 133, d)
+    return z.mean(dim=1)                                     # (B, d) time-pooled descriptor
+
+  def forward(self, x):
+    return self.classifier(self._features(x))
+
+  def forward_with_features(self, x):
+    feat = self._features(x)
+    return self.classifier(feat), feat                       # embed distill regresses feat
+
+  def save_model_to_tflite(self):
+    print("\n*** ConformerStudent: tflite export deferred (attention/conv in graph). "
+          "float .pth metrics are logged.")
+    return
+
+
 class BaselineGRU(ModelBase):
   """
   Track F CRNN: the exact Baseline conv stack followed by a GRU over time,
