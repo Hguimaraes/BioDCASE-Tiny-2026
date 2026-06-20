@@ -24,7 +24,7 @@ import torch
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
-from pipeline_pytorch.model_tiny_ml import ModFilterNet
+from pipeline_pytorch.model_tiny_ml import ModFilterNet, ModFusionNet
 from pipeline_pytorch.model_training import run_model_training, run_validation_epoch
 from pipeline_pytorch.distillation import load_teacher_logits, load_teacher_embeddings
 from pipeline_pytorch.paths import MODELS_DIR
@@ -92,6 +92,8 @@ def main():
   ap.add_argument('--batch', type=int, default=16, help='D2 used 16; matters a lot per-epoch')
   ap.add_argument('--num-workers', type=int, default=4)
   # model (signal-processing biases)
+  ap.add_argument('--arch', choices=['fusion', 'filter'], default='fusion',
+                  help='fusion = conventional GAP + modulation branch (paper-motivated); filter = modulation-dominant')
   ap.add_argument('--n-filters', type=int, default=32)
   ap.add_argument('--n-mod', type=int, default=8, help='Gabor modulation filters per channel')
   ap.add_argument('--mod-kernel', type=int, default=33, help='temporal filterbank kernel (odd)')
@@ -141,16 +143,17 @@ def main():
   dl_tr = torch.utils.data.DataLoader(LazyDS(paths, y, Tlog, Temb), batch_size=args.batch, shuffle=True, num_workers=args.num_workers)
   dl_va = torch.utils.data.DataLoader(LazyDS(vpaths, yv), batch_size=128, shuffle=False, num_workers=args.num_workers)
 
-  model = ModFilterNet(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
-                       n_filters=args.n_filters, n_mod=args.n_mod, mod_kernel=args.mod_kernel,
-                       strf=args.strf, learnable_mod=not args.freeze_mod, attn_dim=args.attn_dim,
-                       device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
-                       criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
-                       optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
-                       verbose=False)
+  Model = ModFusionNet if args.arch == 'fusion' else ModFilterNet
+  model = Model(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
+                n_filters=args.n_filters, n_mod=args.n_mod, mod_kernel=args.mod_kernel,
+                strf=args.strf, learnable_mod=not args.freeze_mod, attn_dim=args.attn_dim,
+                device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
+                criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
+                optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
+                verbose=False)
   n_params = int(sum(p.numel() for p in model.parameters()))
-  print('  ModFilterNet params: {:,} ({:.2f}x Baseline 97k) | n_mod {} mod_kernel {} strf {} learnable_mod {}'.format(
-      n_params, n_params / 97000, args.n_mod, args.mod_kernel, args.strf, not args.freeze_mod))
+  print('  {} params: {:,} ({:.2f}x Baseline 97k) | n_mod {} mod_kernel {} strf {} learnable_mod {}'.format(
+      Model.__name__, n_params, n_params / 97000, args.n_mod, args.mod_kernel, args.strf, not args.freeze_mod))
 
   cfg = {'model_training': {'num_epochs': args.epochs}, 'training_recipe': {
     'augmentation': {'enabled': False}, 'mixup': {'alpha': 0.0, 'p': 0.0},
@@ -168,10 +171,10 @@ def main():
   print('  val acc {:.4f} auc {:.4f} | params {}  (D2 Baseline 0.6952 / 0.9402)'.format(acc, auc, n_params))
 
   out = Path(__file__).parent / 'results'; out.mkdir(parents=True, exist_ok=True)
-  tag = 'modnet_strf{}_m{}_k{}_x{}_s{}'.format(int(args.strf), args.n_mod, args.mod_kernel, args.extra_per_class, args.seed)
+  tag = 'modnet_{}_strf{}_m{}_k{}_x{}_s{}'.format(args.arch, int(args.strf), args.n_mod, args.mod_kernel, args.extra_per_class, args.seed)
   import yaml
   yaml.safe_dump({
-    'model': 'ModFilterNet', 'n_filters': args.n_filters, 'n_mod': args.n_mod, 'mod_kernel': args.mod_kernel,
+    'model': Model.__name__, 'arch': args.arch, 'n_filters': args.n_filters, 'n_mod': args.n_mod, 'mod_kernel': args.mod_kernel,
     'strf': args.strf, 'learnable_mod': not args.freeze_mod, 'attn_dim': args.attn_dim,
     'extra_per_class': args.extra_per_class, 'batch': args.batch, 'epochs': args.epochs, 'seed': args.seed,
     'params': n_params, 'val_acc': round(float(acc), 4), 'val_auc': round(float(auc), 4),

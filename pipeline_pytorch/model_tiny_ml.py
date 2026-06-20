@@ -109,6 +109,13 @@ class ConformerStudent(ModelBase):
     return
 
 
+def _gn_groups(c):
+  """largest of (8,4,2,1) dividing c -> GroupNorm groups (no running buffers, so
+  unlike BatchNorm it's identical at train/eval and safe under this repo's
+  parameter-only WeightEMA)."""
+  return next(k for k in (8, 4, 2, 1) if c % k == 0)
+
+
 class GaborTemporalConv(nn.Module):
   """Depthwise 1-D modulation filterbank over time: each of `channels` feature
   channels is filtered by `n_mod` Gabor band-passes initialized at modulation
@@ -190,7 +197,7 @@ class ModFilterNet(ModelBase):
     ch = nf * 2
     self.modfb = GaborTemporalConv(ch, n_mod=n_mod, kernel=self.cfg.get('mod_kernel', 33),
                                    fs_mod=self.cfg.get('fs_mod', 46.875), learnable=learn)
-    self.modbn = nn.BatchNorm1d(ch * n_mod)
+    self.modgn = nn.GroupNorm(_gn_groups(ch * n_mod), ch * n_mod)              # EMA-safe (no running stats)
     self.gap_dim = ch * n_mod
     self.pool = AttnPool1d(self.gap_dim, attn_dim=self.cfg.get('attn_dim', 64))
     self.classifier = nn.Sequential(nn.Dropout(self.cfg.get('dropout', 0.05)),
@@ -199,7 +206,7 @@ class ModFilterNet(ModelBase):
 
   def _features(self, x):
     z = self.stem(x).squeeze(2)                                               # (B, ch, T)
-    z = torch.relu(self.modbn(self.modfb(z)))                                 # (B, ch*n_mod, T) modulation maps
+    z = torch.relu(self.modgn(self.modfb(z)))                                 # (B, ch*n_mod, T) modulation maps
     return self.pool(z)                                                       # (B, ch*n_mod) attention-pooled
 
   def forward(self, x):
@@ -214,6 +221,57 @@ class ModFilterNet(ModelBase):
       return super().save_model_to_tflite()                                  # designed to be deployable; attempt it
     except Exception as e:
       print("\n*** ModFilterNet: tflite export deferred ({}). float .pth metrics are logged.".format(type(e).__name__))
+      return
+
+
+class ModFusionNet(ModelBase):
+  """Paper-motivated fusion student: a shared conv trunk (frequency pooled, time
+  preserved) feeds TWO complementary descriptors -- a conventional spectro-temporal
+  GAP descriptor and a modulation descriptor (Gabor temporal filterbank + attention
+  pooling) -- concatenated before the classifier. Modulation features are robust and
+  COMPLEMENTARY (Tiwari/Falk 2022): fusion, not modulation-only, is what wins. The
+  embedding-distill lever stays on the conventional GAP (the proven D2 path).
+  Deployable (conv/linear/softmax/groupnorm). cfg: n_filters (32), n_mod (8),
+  mod_kernel (33), strf (False), learnable_mod (True), attn_dim (64), dropout."""
+
+  def define_network_structure(self):
+    nf = self.cfg.get('n_filters', 32); n_mod = self.cfg.get('n_mod', 8)
+    learn = self.cfg.get('learnable_mod', True)
+    front = GaborSTRFConv(nf, learnable=learn) if self.cfg.get('strf', False) else nn.Conv2d(1, nf, 3, padding=1)
+    self.trunk = nn.Sequential(                                               # pool FREQ only, keep time
+        front, nn.ReLU(), nn.MaxPool2d((2, 1)),
+        nn.Conv2d(nf, nf * 2, 3, padding=1), nn.ReLU(), nn.MaxPool2d((2, 1)),
+        nn.Conv2d(nf * 2, nf * 4, 3, padding=1), nn.ReLU())                   # (B, 4nf, F', T)
+    ch = nf * 4
+    self.gap_dim = ch                                                         # embed lever regresses the conv GAP
+    self.modfb = GaborTemporalConv(ch, n_mod=n_mod, kernel=self.cfg.get('mod_kernel', 33),
+                                   fs_mod=self.cfg.get('fs_mod', 46.875), learnable=learn)
+    self.modgn = nn.GroupNorm(_gn_groups(ch * n_mod), ch * n_mod)
+    self.modpool = AttnPool1d(ch * n_mod, attn_dim=self.cfg.get('attn_dim', 64))
+    self.classifier = nn.Sequential(nn.Dropout(self.cfg.get('dropout', 0.05)),
+                                    nn.Linear(ch + ch * n_mod, 64), nn.ReLU(),
+                                    nn.Linear(64, self.cfg['num_classes']))
+
+  def _branches(self, x):
+    h = self.trunk(x)                                                         # (B, ch, F', T)
+    conv_desc = h.mean((2, 3))                                                # conventional spectro-temporal GAP
+    z = h.mean(2)                                                             # freq-pool -> (B, ch, T)
+    z = torch.relu(self.modgn(self.modfb(z)))                                 # (B, ch*n_mod, T)
+    mod_desc = self.modpool(z)                                                # modulation descriptor
+    return conv_desc, torch.cat([conv_desc, mod_desc], dim=1)
+
+  def forward(self, x):
+    return self.classifier(self._branches(x)[1])
+
+  def forward_with_features(self, x):
+    conv_desc, fused = self._branches(x)
+    return self.classifier(fused), conv_desc                                 # embed distill on the conventional GAP
+
+  def save_model_to_tflite(self):
+    try:
+      return super().save_model_to_tflite()
+    except Exception as e:
+      print("\n*** ModFusionNet: tflite export deferred ({}). float .pth metrics are logged.".format(type(e).__name__))
       return
 
 
