@@ -89,6 +89,8 @@ def main():
                            criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
                            optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
                            verbose=False)
+  n_params = int(sum(p.numel() for p in model.parameters()))
+  print('  model params: {:,} ({:.1f}x Baseline 97k)'.format(n_params, n_params / 97000))
 
   cfg = {'model_training': {'num_epochs': args.epochs}, 'training_recipe': {
     'augmentation': {'enabled': False}, 'mixup': {'alpha': 0.0, 'p': 0.0},
@@ -102,7 +104,6 @@ def main():
   run_model_training(cfg, model, dl_tr, dl_va, label_dict=cidx, run_logger=None, class_counts=class_counts)
 
   acc, auc = (lambda r: (r[1], r[2]))(run_validation_epoch(model, dl_va))
-  n_params = int(sum(p.numel() for p in model.parameters()))
   print('\n=== Conformer student (d{} L{}) ==='.format(args.d_model, args.num_layers))
   print('  val acc {:.4f} auc {:.4f} | params {}  (D2 Baseline 0.6952 / 0.9402)'.format(acc, auc, n_params))
 
