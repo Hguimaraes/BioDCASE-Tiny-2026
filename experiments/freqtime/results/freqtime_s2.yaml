@@ -1,0 +1,18 @@
+model: FreqTimeNet
+n_filters: 32
+tcn_ch: 64
+tcn_kernel: 7
+tcn_dilations:
+- 1
+- 2
+- 4
+- 8
+strf: true
+dropout: 0.05
+batch: 16
+epochs: 120
+seed: 2
+params: 81451
+val_acc: 0.7359
+val_auc: 0.9452
+finished_utc: '2026-06-21T23:08:14.356796'

@@ -1,0 +1,12 @@
+model: LearnFrontNet
+n_filters: 32
+n_mels: 40
+dropout: 0.05
+batch: 16
+epochs: 120
+seed: 3
+params: 97323
+pcen_params: 160
+val_acc: 0.694
+val_auc: 0.9399
+finished_utc: '2026-06-21T19:12:49.415709'

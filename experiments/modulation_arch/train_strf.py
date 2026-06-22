@@ -1,20 +1,21 @@
 # --
-# Architecture probe: ModFilterNet -- signal-processing inductive biases baked into
-# the model (learnable Gabor temporal modulation filterbank + attention pooling,
-# optional 2-D Gabor STRF front conv), trained on the PROVEN D2 recipe (PCEN +
-# Perch logit KD + 1536-d embedding distillation + EMA). Thin copy of
-# train_student_phaseB.py: same loader / run_model_training loop; only the model
-# (and its flags) differ. All ops are standard conv/linear/softmax -> deployable.
+# Architecture probe: StrfBaseline -- the proven D2 `Baseline` tiny CNN with its
+# first 3x3 conv swapped for a 2-D Gabor spectro-temporal receptive-field filterbank
+# (GaborSTRFConv). The STRF is the one signal-processing bias that helped (best AUC
+# at ~1x Baseline params); everything else (body, GAP descriptor, D2 recipe: PCEN +
+# Perch logit KD + 1536-d embedding distillation + EMA) is unchanged. All standard
+# conv/linear/softmax -> deployable. Thin copy of train_student_phaseB.py: same
+# loader / run_model_training loop; only the model (and its front-end flags) differ.
 #
 # Validate on NORMAL data first (default --extra-per-class 0); the extra-data path
 # (cap-first XC/TAU) is the same as Phase B and meant for the cluster run.
 #
 #   local validation (normal data):
-#     .venv/bin/python experiments/modulation_arch/train_modnet.py --epochs 60 --batch 16
-#   add the 2-D STRF front:
-#     .venv/bin/python experiments/modulation_arch/train_modnet.py --epochs 60 --batch 16 --strf
+#     .venv/bin/python experiments/modulation_arch/train_strf.py --epochs 60 --batch 16
+#   frozen-prior ablation (Gabor STRF not learned):
+#     .venv/bin/python experiments/modulation_arch/train_strf.py --epochs 60 --batch 16 --freeze-strf
 #   cluster (full extra data):
-#     .venv/bin/python experiments/modulation_arch/train_modnet.py --epochs 60 --batch 16 --extra-per-class 3000
+#     .venv/bin/python experiments/modulation_arch/train_strf.py --epochs 60 --batch 16 --extra-per-class 3000
 
 import sys, glob, argparse, datetime
 from pathlib import Path
@@ -24,9 +25,8 @@ import torch
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
-from pipeline_pytorch.model_tiny_ml import ModFilterNet, ModFusionNet
+from pipeline_pytorch.model_tiny_ml import StrfBaseline
 from pipeline_pytorch.model_training import run_model_training, run_validation_epoch
-from pipeline_pytorch.distillation import load_teacher_logits, load_teacher_embeddings
 from pipeline_pytorch.paths import MODELS_DIR
 
 CACHE = ROOT / 'output' / '02_features' / 'cache_pcen'
@@ -91,15 +91,11 @@ def main():
   ap.add_argument('--epochs', type=int, default=60)
   ap.add_argument('--batch', type=int, default=16, help='D2 used 16; matters a lot per-epoch')
   ap.add_argument('--num-workers', type=int, default=4)
-  # model (signal-processing biases)
-  ap.add_argument('--arch', choices=['fusion', 'filter'], default='fusion',
-                  help='fusion = conventional GAP + modulation branch (paper-motivated); filter = modulation-dominant')
+  # model (STRF front-end)
   ap.add_argument('--n-filters', type=int, default=32)
-  ap.add_argument('--n-mod', type=int, default=8, help='Gabor modulation filters per channel')
-  ap.add_argument('--mod-kernel', type=int, default=33, help='temporal filterbank kernel (odd)')
-  ap.add_argument('--strf', action='store_true', help='use the 2-D Gabor STRF front conv')
-  ap.add_argument('--freeze-mod', action='store_true', help='freeze Gabor filterbanks (pure prior, no learning)')
-  ap.add_argument('--attn-dim', type=int, default=64)
+  ap.add_argument('--strf-kernel', type=int, default=9, help='Gabor STRF kernel size (odd, square)')
+  ap.add_argument('--freeze-strf', action='store_true', help='freeze the Gabor STRF (pure prior, no learning)')
+  ap.add_argument('--dropout', type=float, default=0.05)
   # data: 0 = normal/original-only (validate here); >0 = cap N/class extra; <0 = all
   ap.add_argument('--extra-per-class', type=int, default=0,
                   help='0 = normal data (original-only); N>0 = cap N/class extra; <0 = all')
@@ -143,17 +139,16 @@ def main():
   dl_tr = torch.utils.data.DataLoader(LazyDS(paths, y, Tlog, Temb), batch_size=args.batch, shuffle=True, num_workers=args.num_workers)
   dl_va = torch.utils.data.DataLoader(LazyDS(vpaths, yv), batch_size=128, shuffle=False, num_workers=args.num_workers)
 
-  Model = ModFusionNet if args.arch == 'fusion' else ModFilterNet
-  model = Model(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
-                n_filters=args.n_filters, n_mod=args.n_mod, mod_kernel=args.mod_kernel,
-                strf=args.strf, learnable_mod=not args.freeze_mod, attn_dim=args.attn_dim,
-                device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
-                criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
-                optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
-                verbose=False)
+  model = StrfBaseline(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
+                       n_filters=args.n_filters, strf_kernel=args.strf_kernel,
+                       learnable_strf=not args.freeze_strf, dropout=args.dropout,
+                       device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
+                       criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
+                       optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
+                       verbose=False)
   n_params = int(sum(p.numel() for p in model.parameters()))
-  print('  {} params: {:,} ({:.2f}x Baseline 97k) | n_mod {} mod_kernel {} strf {} learnable_mod {}'.format(
-      Model.__name__, n_params, n_params / 97000, args.n_mod, args.mod_kernel, args.strf, not args.freeze_mod))
+  print('  StrfBaseline params: {:,} ({:.2f}x Baseline 97k) | strf_kernel {} learnable_strf {}'.format(
+      n_params, n_params / 97000, args.strf_kernel, not args.freeze_strf))
 
   cfg = {'model_training': {'num_epochs': args.epochs}, 'training_recipe': {
     'augmentation': {'enabled': False}, 'mixup': {'alpha': 0.0, 'p': 0.0},
@@ -167,15 +162,15 @@ def main():
   run_model_training(cfg, model, dl_tr, dl_va, label_dict=cidx, run_logger=None, class_counts=class_counts)
 
   acc, auc = (lambda r: (r[1], r[2]))(run_validation_epoch(model, dl_va))
-  print('\n=== ModFilterNet (n_mod {} strf {}) ==='.format(args.n_mod, args.strf))
+  print('\n=== StrfBaseline (strf_kernel {} learnable {}) ==='.format(args.strf_kernel, not args.freeze_strf))
   print('  val acc {:.4f} auc {:.4f} | params {}  (D2 Baseline 0.6952 / 0.9402)'.format(acc, auc, n_params))
 
   out = Path(__file__).parent / 'results'; out.mkdir(parents=True, exist_ok=True)
-  tag = 'modnet_{}_strf{}_m{}_k{}_x{}_s{}'.format(args.arch, int(args.strf), args.n_mod, args.mod_kernel, args.extra_per_class, args.seed)
+  tag = 'strfbase_k{}_strf{}_x{}_s{}'.format(args.strf_kernel, int(not args.freeze_strf), args.extra_per_class, args.seed)
   import yaml
   yaml.safe_dump({
-    'model': Model.__name__, 'arch': args.arch, 'n_filters': args.n_filters, 'n_mod': args.n_mod, 'mod_kernel': args.mod_kernel,
-    'strf': args.strf, 'learnable_mod': not args.freeze_mod, 'attn_dim': args.attn_dim,
+    'model': 'StrfBaseline', 'n_filters': args.n_filters, 'strf_kernel': args.strf_kernel,
+    'learnable_strf': not args.freeze_strf, 'dropout': args.dropout,
     'extra_per_class': args.extra_per_class, 'batch': args.batch, 'epochs': args.epochs, 'seed': args.seed,
     'params': n_params, 'val_acc': round(float(acc), 4), 'val_auc': round(float(auc), 4),
     'finished_utc': datetime.datetime.utcnow().isoformat(),

@@ -1,0 +1,13 @@
+model: StrfBaseline
+n_filters: 32
+strf_kernel: 9
+learnable_strf: true
+dropout: 0.05
+extra_per_class: 0
+batch: 16
+epochs: 120
+seed: 1
+params: 99435
+val_acc: 0.7158
+val_auc: 0.9519
+finished_utc: '2026-06-21T19:32:37.807464'
