@@ -97,6 +97,15 @@ def main():
                   help='0 = original-only; N>0 = cap N/class extra; <0 = all extra')
   ap.add_argument('--xc', type=Path, default=XC_DEFAULT)
   ap.add_argument('--bg', type=Path, default=BG_DEFAULT)
+  # accuracy-tuning knobs (defaults = the canonical D2 recipe, so a no-flag run reproduces it)
+  ap.add_argument('--select-metric', choices=['val_auc', 'val_acc', 'val_loss'], default='val_auc',
+                  help='checkpoint-selection metric; val_acc optimizes for accuracy')
+  ap.add_argument('--alpha', type=float, default=0.5, help='KD vs CE weight (lower = more CE/accuracy)')
+  ap.add_argument('--temperature', type=float, default=3.0, help='KD softmax temperature')
+  ap.add_argument('--label-smoothing', type=float, default=0.1, help='CE label smoothing (0 = peak accuracy)')
+  ap.add_argument('--embed-weight', type=float, default=1.0, help='embedding-distillation (hint) loss weight (beta)')
+  ap.add_argument('--weight-decay', type=float, default=0.0, help='AdamW weight decay (0 = plain Adam)')
+  ap.add_argument('--tag', type=str, default='', help='suffix appended to the result filename for sweeps')
   ap.add_argument('--seed', type=int, default=1)
   args = ap.parse_args()
   torch.manual_seed(args.seed); np.random.seed(args.seed)
@@ -141,19 +150,24 @@ def main():
                       strf=not args.no_strf, dropout=args.dropout,
                       device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
                       criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
-                      optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
+                      optimizer={'module': 'torch.optim', 'attr': 'AdamW',
+                                 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999], 'weight_decay': args.weight_decay}},
                       verbose=False)
   n_params = int(sum(p.numel() for p in model.parameters()))
   rf = 1 + sum((args.tcn_kernel - 1) * d for d in args.tcn_dilations)
   print('  FreqTimeNet params: {:,} ({:.2f}x Baseline 97k) | tcn_ch {} kernel {} dilations {} (RF {} frames) strf {}'.format(
       n_params, n_params / 97000, args.tcn_ch, args.tcn_kernel, args.tcn_dilations, rf, not args.no_strf))
 
+  print('  tuning: select {} | alpha {} | T {} | label_smoothing {} | embed_weight {} | weight_decay {}'.format(
+      args.select_metric, args.alpha, args.temperature, args.label_smoothing, args.embed_weight, args.weight_decay))
+
   cfg = {'model_training': {'num_epochs': args.epochs}, 'training_recipe': {
     'augmentation': {'enabled': False}, 'mixup': {'alpha': 0.0, 'p': 0.0},
     'scheduler': {'name': 'cosine', 'warmup_epochs': 5, 'min_lr_factor': 0.05},
-    'best_checkpoint_metric': 'val_auc', 'early_stopping_patience': 0,
-    'distillation': {'enabled': True, 'alpha': 0.5, 'temperature': 3.0, 'label_smoothing': 0.1,
-                     'embed': {'enabled': True, 'weight': 1.0, 'mse_weight': 1.0, 'cos_weight': 1.0}},
+    'best_checkpoint_metric': args.select_metric, 'early_stopping_patience': 0,
+    'distillation': {'enabled': True, 'alpha': args.alpha, 'temperature': args.temperature,
+                     'label_smoothing': args.label_smoothing,
+                     'embed': {'enabled': True, 'weight': args.embed_weight, 'mse_weight': 1.0, 'cos_weight': 1.0}},
     'ema': {'enabled': True, 'decay': 0.999}, 'class_balance': {'mode': 'none'}}}
 
   class_counts = np.bincount(y, minlength=n_cls)
@@ -164,12 +178,15 @@ def main():
   print('  val acc {:.4f} auc {:.4f} | params {}  (StrfBaseline @120ep 0.7098 / 0.9485)'.format(acc, auc, n_params))
 
   out = Path(__file__).parent / 'results'; out.mkdir(parents=True, exist_ok=True)
-  tag = 'freqtime_d{}_x{}_s{}'.format(len(args.tcn_dilations), args.extra_per_class, args.seed)
+  tag = 'freqtime_d{}_x{}{}_s{}'.format(len(args.tcn_dilations), args.extra_per_class,
+                                        ('_' + args.tag) if args.tag else '', args.seed)
   import yaml
   yaml.safe_dump({
     'model': 'FreqTimeNet', 'n_filters': args.n_filters,
     'tcn_ch': args.tcn_ch, 'tcn_kernel': args.tcn_kernel,
     'tcn_dilations': args.tcn_dilations, 'strf': not args.no_strf, 'dropout': args.dropout,
+    'select_metric': args.select_metric, 'alpha': args.alpha, 'temperature': args.temperature,
+    'label_smoothing': args.label_smoothing, 'embed_weight': args.embed_weight, 'weight_decay': args.weight_decay,
     'batch': args.batch, 'epochs': args.epochs, 'seed': args.seed, 'params': n_params,
     'val_acc': round(float(acc), 4), 'val_auc': round(float(auc), 4),
     'finished_utc': datetime.datetime.utcnow().isoformat(),
