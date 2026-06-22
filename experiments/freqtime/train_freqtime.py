@@ -25,7 +25,10 @@ from pipeline_pytorch.model_training import run_model_training, run_validation_e
 from pipeline_pytorch.paths import MODELS_DIR
 
 CACHE = ROOT / 'output' / '02_features' / 'cache_pcen'
+EXTRA_CACHE = ROOT / 'output' / '02_features' / 'cache_pcen_extra'
 TEACHER = ROOT / 'experiments' / 'perch' / 'embeddings' / 'perch_v2_cpu'
+XC_DEFAULT = '/home/hguimaraes/datasets/extra/xc'
+BG_DEFAULT = '/home/hguimaraes/datasets/extra/background'
 
 
 def build_index(sources):
@@ -50,13 +53,19 @@ def gather_rows(sources, idx, stems, key, dim):
   return out
 
 
-def gather(split_glob, classes_idx, have):
-  items = []
+def gather(split_glob, classes_idx, have, cap=0, seed=42, is_extra=False):
+  rng = np.random.default_rng(seed)
+  by_cls = {}
   for f in sorted(Path(p) for p in glob.glob(split_glob)):
     cls = f.parent.name
     if cls not in classes_idx or not have(f.stem):
       continue
-    items.append((f, classes_idx[cls], f.stem))
+    by_cls.setdefault(cls, []).append(f)
+  items = []
+  for cls, fs in by_cls.items():
+    if is_extra and cap and len(fs) > cap:
+      fs = [fs[i] for i in rng.choice(len(fs), cap, replace=False)]
+    items += [(f, classes_idx[cls], f.stem) for f in fs]
   return items
 
 
@@ -83,6 +92,11 @@ def main():
   ap.add_argument('--tcn-dilations', type=int, nargs='+', default=[1, 2, 4, 8])
   ap.add_argument('--no-strf', action='store_true', help='plain 9x9 conv front instead of Gabor STRF')
   ap.add_argument('--dropout', type=float, default=0.05)
+  # extra data (Phase-B XC/TAU): 0 = original-only; N>0 = cap N/class extra; <0 = all
+  ap.add_argument('--extra-per-class', type=int, default=0,
+                  help='0 = original-only; N>0 = cap N/class extra; <0 = all extra')
+  ap.add_argument('--xc', type=Path, default=XC_DEFAULT)
+  ap.add_argument('--bg', type=Path, default=BG_DEFAULT)
   ap.add_argument('--seed', type=int, default=1)
   args = ap.parse_args()
   torch.manual_seed(args.seed); np.random.seed(args.seed)
@@ -90,12 +104,22 @@ def main():
   ck = torch.load(TEACHER / 'teacher_mlp' / 'teacher_head.pt', map_location='cpu', weights_only=False)
   classes = [str(n) for n in ck['label_names']]; cidx = {c: i for i, c in enumerate(classes)}; n_cls = len(classes)
 
+  use_extra = args.extra_per_class != 0
   EMB_SOURCES = [TEACHER / 'Train.npz']
   LOGIT_SOURCES = [TEACHER / 'teacher_mlp' / 'soft_logits_Train.npz']
+  if use_extra:
+    EMB_SOURCES += [args.xc / 'embeddings' / 'perch_v2_cpu' / 'clips.npz', args.bg / 'embeddings' / 'perch_v2_cpu' / 'clips.npz']
+    LOGIT_SOURCES += [args.xc / 'predictions.npz', args.bg / 'predictions.npz']
   emb_idx = build_index(EMB_SOURCES); logit_idx = build_index(LOGIT_SOURCES)
   have = lambda s: s in emb_idx and s in logit_idx
 
-  items = gather(str(CACHE / 'Train' / '*' / '*.npz'), cidx, have)
+  orig = gather(str(CACHE / 'Train' / '*' / '*.npz'), cidx, have)
+  if use_extra:
+    cap = args.extra_per_class if args.extra_per_class > 0 else 0
+    extra = gather(str(EXTRA_CACHE / '*' / '*.npz'), cidx, have, cap=cap, seed=args.seed, is_extra=True)
+  else:
+    extra = []
+  items = orig + extra
   stems = [s for _, _, s in items]; paths = [str(f) for f, _, _ in items]
   y = np.array([ci for _, ci, _ in items], np.int64)
   Tlog = gather_rows(LOGIT_SOURCES, logit_idx, stems, 'logits', n_cls)
@@ -104,14 +128,17 @@ def main():
 
   vitems = [(str(f), cidx[f.parent.name]) for f in sorted((CACHE / 'Validation').glob('*/*.npz')) if f.parent.name in cidx]
   vpaths = [p for p, _ in vitems]; yv = np.array([c for _, c in vitems], np.int64)
-  print('train: {} | val: {} | classes {}'.format(len(items), len(yv), n_cls))
+  cap_label = 'none' if args.extra_per_class == 0 else ('all' if args.extra_per_class < 0 else args.extra_per_class)
+  print('train: {} original + {} extra = {} (extra/class {}) | val: {} | classes {}'.format(
+      len(orig), len(extra), len(items), cap_label, len(yv), n_cls))
 
   dl_tr = torch.utils.data.DataLoader(LazyDS(paths, y, Tlog, Temb), batch_size=args.batch, shuffle=True, num_workers=args.num_workers)
   dl_va = torch.utils.data.DataLoader(LazyDS(vpaths, yv), batch_size=128, shuffle=False, num_workers=args.num_workers)
 
   model = FreqTimeNet(input_shape=[1, 40, 133], num_classes=n_cls, save_path=str(MODELS_DIR),
                       n_filters=args.n_filters, tcn_ch=args.tcn_ch, tcn_kernel=args.tcn_kernel,
-                      tcn_dilations=args.tcn_dilations, strf=not args.no_strf, dropout=args.dropout,
+                      tcn_dilations=args.tcn_dilations,
+                      strf=not args.no_strf, dropout=args.dropout,
                       device={'use_cpu': not torch.cuda.is_available(), 'device_name': 'cuda:0'},
                       criterion={'module': 'torch.nn', 'attr': 'CrossEntropyLoss', 'kwargs': {'label_smoothing': 0.0}},
                       optimizer={'module': 'torch.optim', 'attr': 'Adam', 'kwargs': {'lr': 0.001, 'betas': [0.9, 0.999]}},
@@ -137,10 +164,11 @@ def main():
   print('  val acc {:.4f} auc {:.4f} | params {}  (StrfBaseline @120ep 0.7098 / 0.9485)'.format(acc, auc, n_params))
 
   out = Path(__file__).parent / 'results'; out.mkdir(parents=True, exist_ok=True)
-  tag = 'freqtime_s{}'.format(args.seed)
+  tag = 'freqtime_d{}_x{}_s{}'.format(len(args.tcn_dilations), args.extra_per_class, args.seed)
   import yaml
   yaml.safe_dump({
-    'model': 'FreqTimeNet', 'n_filters': args.n_filters, 'tcn_ch': args.tcn_ch, 'tcn_kernel': args.tcn_kernel,
+    'model': 'FreqTimeNet', 'n_filters': args.n_filters,
+    'tcn_ch': args.tcn_ch, 'tcn_kernel': args.tcn_kernel,
     'tcn_dilations': args.tcn_dilations, 'strf': not args.no_strf, 'dropout': args.dropout,
     'batch': args.batch, 'epochs': args.epochs, 'seed': args.seed, 'params': n_params,
     'val_acc': round(float(acc), 4), 'val_auc': round(float(auc), 4),
