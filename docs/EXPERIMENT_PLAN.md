@@ -361,3 +361,33 @@ The cluster is SLURM-based; the dataset is staged there. Code moves by
   `pcen_embed.yaml` becomes the working base (EMA kept as a free, optional ACC
   bump). Remaining D2 sweeps (β embedding-loss weight, logit-adjust/weighted CE)
   are cheap follow-ups; the critical path is now the fixed-point PCEN int8 check.
+- **2026-06-21** — **Architecture track (freq/time separation) + a methodology
+  fix.** Found a confound: the `train_modnet→train_strf→train_freqtime` script
+  lineage defaulted to **60 epochs**, but canonical D2 uses **120** (a
+  `pcen-embed` run.yaml shows best_epoch ~119). 60ep undertrains by ~5 ACC and
+  had silently sunk earlier verdicts. All numbers below are 3 seeds at the
+  corrected **120ep / batch 16 / min_lr 0.05 / D2 recipe**.
+  - **STRF front HELPS** (`StrfBaseline` = Baseline with a 2-D Gabor STRF first
+    conv): **0.7098 / 0.9485** (99k) vs D2 Baseline 0.6952 / 0.9402 → **+1.5 ACC**.
+    The earlier "STRF is neutral" was purely the 60ep artifact.
+  - **Learnable PCEN front-end is NEUTRAL** (`LearnFrontNet`, per-band learnable
+    gain/bias/root/smoothing over a raw mel cache): 0.6946 / 0.9399 vs fixed-PCEN
+    0.6952 — the bioacoustic prior is already optimal; front-end *compression*
+    isn't a lever. (Frozen-PCEN control reproduced D2, confirming the in-graph
+    path is faithful.)
+  - **FreqTimeNet = new project best** (Tan-2019-style freq/time separation:
+    Gabor-STRF + freq-dilated 2-D convs collapse the mel axis keeping all 133
+    frames; a **simple** dilated 1-D conv trunk models time; mean+std pooling):
+    **0.7274 / 0.9459 at 81k params** — **+1.8 ACC over StrfBaseline at FEWER
+    params**, so the gain is the *architecture* (handle freq and time
+    separately + model the time axis instead of GAP-ing it), not capacity.
+  - **NEGATIVE — temporal modulation-energy branch does NOT help.** Adding a
+    second, Gabor-quadrature `sqrt(cos²+sin²)` modulation-energy branch to each
+    temporal block (concat fusion) gave **0.6776 / 0.9311 at 101k** — **−5 ACC
+    with MORE params**, all 3 seeds below the simple trunk. The dilated 1-D trunk
+    already captures the temporal/rhythm structure; an explicit modulation branch
+    is redundant and harmful. Per the concat gate (does the branch add info? no),
+    a FiLM-combine version of the same branch is *not* pursued. Joins the
+    "simpler-wins / capacity-isn't-the-lever" pattern (cf. MSAB-FiLM, GRU). The
+    modulation-branch code/experiments are not kept; the simple FreqTimeNet stays
+    the working base.
